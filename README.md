@@ -47,19 +47,14 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
    - Tracks already processed documents
    - Prevents re-scraping of existing documents
 
-5. **Deduplicator (`deduplicator.py`)**
-   - Advanced document deduplication logic
-   - Compares document metadata to identify unique entries
-   - Prevents storage of duplicate or redundant documents
-
-6. **Validation (`validation.py`)**
+5. **Validation (`validation.py`)**
    - Validates document metadata against a predefined schema
    - Flexible identifier validation
      - Identifier is now an optional field
      - Allows documents without a standard identifier format
    - Ensures data integrity and consistency
 
-7. **Metrics Collection (`metrics.py`)**
+6. **Metrics Collection (`metrics.py`)**
    - Prometheus integration for monitoring
    - Tracks key performance indicators:
      - Document processing rates
@@ -68,7 +63,7 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
      - Request statistics
    - Supports both file-based and HTTP exports
 
-8. **Configuration Management (`config_manager.py`)**
+7. **Configuration Management (`config_manager.py`)**
    - YAML-based configuration
    - Environment variable support
    - Runtime configuration validation
@@ -185,19 +180,26 @@ Documents are stored as JSON files with the following structure:
 ```json
 {
   "metadata": {
-    "celex_number": "32025R0040",
-    "title": "Document Title",
-    "identifier": "Document Identifier",
-    "directory_codes": ["13.30.99.00", "15.10.30.30"],
-    "directory_descriptions": [
-      "Description 1",
-      "Description 2"
-    ],
+    "celex_number": "Unique EU document identifier",
+    "title": "Full official title of the document",
+    "identifier": "Internal document identifier",
+    "eli_uri": "European Legislation Identifier URI",
+    "html_url": "URL to HTML version of the document",
+    "pdf_url": "URL to PDF version of the document",
     "dates": {
-      "Date of document": "YYYY-MM-DD",
-      "Date of effect": "YYYY-MM-DD"
-    }
-  }
+      "Date of document": "Date when document was created",
+      "Date of effect": "Date when document becomes active",
+      "Date of end of validity": "Date when document expires"
+    },
+    "authors": ["List of document authors/originating bodies"],
+    "responsible_body": "Primary responsible administrative body",
+    "form": "Type of legal instrument",
+    "eurovoc_descriptors": ["Controlled vocabulary terms describing the document"],
+    "subject_matters": ["Detailed subject classification"],
+    "directory_codes": ["Hierarchical classification codes"],
+    "directory_descriptions": ["Descriptions of classification codes"]
+  },
+  "content": "Full text of the document as a string"
 }
 ```
 
