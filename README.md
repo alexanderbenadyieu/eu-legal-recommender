@@ -1,13 +1,14 @@
 # EUR-Lex Web Scraper
 
-A robust web scraper for extracting legislative documents from EUR-Lex, focusing on the Official Journal L series (Legislation). The scraper captures comprehensive metadata, including document identifiers, directory codes, and full-text content.
+A web scraper for extracting legislative documents from EUR-Lex, focusing on the Official Journal L series (Legislation). The scraper captures comprehensive metadata, including document identifiers, directory codes, and full-text content.
 
 ## Features
 
 - **Automated Document Scraping**
-  - Scrapes legislative documents from EUR-Lex's Official Journal L series
   - Supports date range-based scraping
-  - Handles multiple document types and formats
+  - Handles multiple document types
+  - Automatic retry mechanism for failed requests
+  - Comprehensive error handling and recovery
   
 - **Rich Metadata Extraction**
   - Document identifiers and CELEX numbers
@@ -15,18 +16,10 @@ A robust web scraper for extracting legislative documents from EUR-Lex, focusing
   - Publication dates and legal dates
   - Authors and responsible bodies
   - EuroVoc descriptors and subject matters
-  
-- **Robust Architecture**
-  - Automatic retry mechanism for failed requests
-  - Rate limiting to respect server constraints
-  - Comprehensive error handling and recovery
-  - Detailed logging with rotation
-  - Prometheus metrics collection
 
 - **Efficient Storage**
   - Organized hierarchical storage structure (year/month/day)
   - JSON format for easy data processing
-  - Deduplication of existing documents
   - Automatic directory creation
 
 ## System Architecture
@@ -82,6 +75,15 @@ A robust web scraper for extracting legislative documents from EUR-Lex, focusing
 
 ### Data Structures
 
+#### Document Content
+```python
+class DocumentContent:
+    full_text: str            # Complete document text
+    html_url: str             # Source HTML URL
+    pdf_url: str              # PDF version URL
+    metadata: DocumentMetadata # Associated metadata
+```
+
 #### Document Metadata
 ```python
 @dataclass
@@ -99,22 +101,7 @@ class DocumentMetadata:
     subject_matters: List[str]        # Subject categories
     directory_codes: List[str]        # Classification codes
     directory_descriptions: List[str]  # Code descriptions
-```
-
-#### Document Content
-```python
-class DocumentContent:
-    full_text: str            # Complete document text
-    html_url: str             # Source HTML URL
-    pdf_url: str              # PDF version URL
-    metadata: DocumentMetadata # Associated metadata
-```
-
-## Recent Updates
-
-- Enhanced CELEX number validation to support more document formats
-- Improved metadata schema flexibility
-- Added comprehensive `.gitignore` for better version control
+`````
 
 ## Quick Start
 
@@ -184,54 +171,12 @@ eurlex-scraper/
 ├── logs/            # Log files
 └── tests/           # Unit and integration tests
 ```
-
-## Usage
-
-### Basic Usage
-
-Run the scraper for a specific date range:
-```bash
-python src/main.py --start-date 2025-01-01 --end-date 2025-01-31
-```
-
 ### Command Line Arguments
 
 - `--start-date`: Start date for scraping (YYYY-MM-DD)
 - `--end-date`: End date for scraping (YYYY-MM-DD)
 - `--config`: Path to custom config file (optional)
 - `--log-level`: Set logging level (optional)
-
-## Configuration
-
-The scraper can be configured through `config/config.yaml`:
-
-```yaml
-scraping:
-  base_url: 'https://eur-lex.europa.eu'
-  request_timeout: 30
-  language: 'EN'
-  rate_limit: 1.0  # Requests per second
-  max_retries: 3
-  retry_delay: 5.0
-
-storage:
-  base_dir: 'data'
-  file_format: 'json'
-  backup_enabled: true
-  compression: false
-
-metrics:
-  enabled: true
-  directory: 'metrics'
-  export_port: 9090
-  collection_interval: 60
-
-logging:
-  level: 'INFO'
-  rotation: '1 day'
-  retention: '30 days'
-  compression: 'gz'
-```
 
 ## Output Format
 
@@ -280,38 +225,19 @@ The scraper implements several error handling mechanisms:
    - Prometheus metrics for monitoring
    - Alert conditions for critical failures
 
-## Performance Considerations
-
-1. **Memory Management**
-   - Streaming response handling for large documents
-   - Efficient string processing for text content
-   - Garbage collection optimization
-
-2. **Storage Efficiency**
-   - Compression options for stored documents
-   - Deduplication of repeated content
-   - Efficient indexing structure
-
-3. **Concurrency**
-   - Configurable concurrent downloads
-   - Connection pooling
-   - Resource usage limits
-
 ## Limitations
 
 ### Date Range Restriction
-The scraper only works for documents published on or after October 2nd, 2023. This limitation exists because:
-- The EUR-Lex website underwent structural changes on this date
+The scraper only works for documents published on or after October 2nd, 2023. This limitation exists because the EUR-Lex website underwent structural changes on this date
 - Documents before this date use a different URL format and page structure
 - Attempting to scrape earlier dates will result in an `InvalidDateError`
 
-Example error when trying to scrape older documents:
 ```bash
 $ python src/main.py --start-date 2023-09-15 --end-date 2023-09-15
 ERROR    Cannot scrape dates before October 2nd, 2023 due to website structure changes. Provided start date: 2023-09-15
 ```
 
 ### Other Limitations
-- Only scrapes the Official Journal L series
-- Limited to documents in English
+- Only scrapes the Official Journal L series, not adapted to C series
+- Limited to documents in English - it can be easily adapted to other languages with URL handling
 - Some document types may have incomplete metadata
