@@ -1,292 +1,243 @@
-import json
+import sqlite3
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from pathlib import Path
-from datetime import datetime
-import sqlite3
-from tqdm import tqdm
-import nltk
-from nltk.tokenize import word_tokenize
 from collections import Counter
-from sklearn.feature_extraction.text import TfidfVectorizer
-import plotly.express as px
-import plotly.graph_objects as go
 from wordcloud import WordCloud
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
 
-# Download required NLTK data
+# Download necessary NLTK resources
 nltk.download('punkt')
+nltk.download('stopwords')
 
-# Set style for plots
-plt.style.use('seaborn')
-sns.set_palette('husl')
-
-class EURLexEDA:
-    def __init__(self, data_dir='../data', db_path='eurlex_documents.db'):
-        self.data_dir = Path(data_dir)
-        self.db_path = db_path
-        self.conn = None
-        self.df = None
+class EurLexEDA:
+    def __init__(self, db_path='/data/eurlex.db'):
+        """
+        Comprehensive Exploratory Data Analysis for EurLex Dataset
         
-    def create_database(self):
-        """Create SQLite database and load all JSON files."""
-        self.conn = sqlite3.connect(self.db_path)
-        cursor = self.conn.cursor()
+        :param db_path: Path to the SQLite database
+        """
+        # Establish database connection
+        self.conn = sqlite3.connect(db_path)
         
-        # Create main documents table
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS documents (
-            celex TEXT PRIMARY KEY,
-            title TEXT,
-            document_type TEXT,
-            year INTEGER,
-            number INTEGER,
-            date_document DATE,
-            date_effect DATE,
-            date_end DATE,
-            directory_code TEXT,
-            full_text TEXT,
-            author TEXT,
-            form TEXT,
-            subject_matter TEXT
-        )
-        """)
+        # Load comprehensive dataset
+        self.load_comprehensive_data()
         
-        # Create eurovoc_descriptors table with many-to-many relationship
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS eurovoc_descriptors (
-            celex TEXT,
-            descriptor TEXT,
-            PRIMARY KEY (celex, descriptor),
-            FOREIGN KEY (celex) REFERENCES documents(celex)
-        )
-        """)
-        
-        # Load JSON files
-        json_files = list(self.data_dir.rglob('*.json'))
-        print(f"Found {len(json_files)} JSON files")
-        
-        for file in tqdm(json_files, desc='Loading documents'):
-            try:
-                with open(file, 'r') as f:
-                    data = json.load(f)
-                    
-                    # Insert into documents table
-                    cursor.execute("""
-                    INSERT OR REPLACE INTO documents 
-                    (celex, title, document_type, year, number, date_document, 
-                     date_effect, date_end, directory_code, full_text, author,
-                     form, subject_matter)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        data.get('celex'),
-                        data.get('title'),
-                        data.get('document_type'),
-                        data.get('year'),
-                        data.get('number'),
-                        data.get('date_document'),
-                        data.get('date_effect'),
-                        data.get('date_end'),
-                        data.get('directory_code'),
-                        data.get('full_text'),
-                        data.get('author'),
-                        data.get('form'),
-                        data.get('subject_matter')
-                    ))
-                    
-                    # Insert eurovoc descriptors
-                    if 'eurovoc_descriptors' in data:
-                        for descriptor in data['eurovoc_descriptors']:
-                            cursor.execute("""
-                            INSERT OR REPLACE INTO eurovoc_descriptors (celex, descriptor)
-                            VALUES (?, ?)
-                            """, (data['celex'], descriptor))
-                    
-            except json.JSONDecodeError:
-                print(f"Error loading {file}")
-                continue
-        
-        self.conn.commit()
-        print("Database created successfully")
+        # Set up visualization style
+        plt.style.use('seaborn')
+        plt.rcParams['figure.figsize'] = (15, 10)
     
-    def load_dataframe(self):
-        """Load data from SQLite into pandas DataFrame."""
-        if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path)
+    def load_comprehensive_data(self):
+        """
+        Load a comprehensive dataset with multiple joins and aggregations
+        """
+        query = """
+        SELECT 
+            d.document_id, 
+            d.celex_number, 
+            d.title, 
+            LENGTH(d.title) as title_length,
+            d.eli_uri, 
+            d.html_url,
+            d.pdf_url,
+            d.date_of_document,
+            d.date_of_effect,
+            d.date_of_end_validity,
+            rb.body_name AS responsible_body,
+            f.form_name AS document_form,
+            GROUP_CONCAT(DISTINCT a.name) AS authors,
+            GROUP_CONCAT(DISTINCT ed.descriptor_name) AS eurovoc_descriptors,
+            GROUP_CONCAT(DISTINCT sm.subject_name) AS subject_matters,
+            GROUP_CONCAT(DISTINCT dc.directory_code) AS directory_codes
+        FROM 
+            documents d
+        LEFT JOIN responsible_bodies rb ON d.responsible_body_id = rb.responsible_body_id
+        LEFT JOIN forms f ON d.form_id = f.form_id
+        LEFT JOIN document_authors da ON d.document_id = da.document_id
+        LEFT JOIN authors a ON da.author_id = a.author_id
+        LEFT JOIN document_eurovoc_descriptors ded ON d.document_id = ded.document_id
+        LEFT JOIN eurovoc_descriptors ed ON ded.descriptor_id = ed.descriptor_id
+        LEFT JOIN document_subject_matters dsm ON d.document_id = dsm.document_id
+        LEFT JOIN subject_matters sm ON dsm.subject_id = sm.subject_id
+        LEFT JOIN document_directory_codes ddc ON d.document_id = ddc.document_id
+        LEFT JOIN directory_codes dc ON ddc.directory_id = dc.directory_id
+        GROUP BY 
+            d.document_id
+        """
         
-        # Load main document data
-        self.df = pd.read_sql("""
-        SELECT d.*, GROUP_CONCAT(e.descriptor) as eurovoc_descriptors
-        FROM documents d
-        LEFT JOIN eurovoc_descriptors e ON d.celex = e.celex
-        GROUP BY d.celex
-        """, self.conn)
+        # Load data
+        self.df = pd.read_sql_query(query, self.conn)
         
-        # Convert dates
-        date_columns = ['date_document', 'date_effect', 'date_end']
+        # Data type conversions and preprocessing
+        date_columns = ['date_of_document', 'date_of_effect', 'date_of_end_validity']
         for col in date_columns:
-            self.df[col] = pd.to_datetime(self.df[col])
+            self.df[col] = pd.to_datetime(self.df[col], errors='coerce')
         
-        # Convert eurovoc_descriptors from string to list
-        self.df['eurovoc_descriptors'] = self.df['eurovoc_descriptors'].apply(
-            lambda x: x.split(',') if pd.notna(x) else []
-        )
-        
-        print(f"Loaded {len(self.df)} documents into DataFrame")
+        # Add derived columns
+        self.df['year'] = self.df['date_of_document'].dt.year
+        self.df['month'] = self.df['date_of_document'].dt.month
     
-    def basic_statistics(self):
-        """Calculate and display basic statistics about the dataset."""
-        print("=== Basic Dataset Statistics ===")
-        print(f"\nTotal number of documents: {len(self.df)}")
+    def basic_dataset_overview(self):
+        """
+        Comprehensive dataset overview with multiple statistical insights
+        """
+        # Total documents and basic stats
+        print("🔍 Dataset Overview:")
+        print(f"Total Documents: {len(self.df)}")
         
-        print("\nDocument types distribution:")
-        print(self.df['document_type'].value_counts())
+        # Document form distribution
+        print("\n📊 Document Form Distribution:")
+        form_dist = self.df['document_form'].value_counts()
+        print(form_dist)
+        plt.figure(figsize=(12, 6))
+        form_dist.plot(kind='bar')
+        plt.title('Distribution of Document Forms')
+        plt.xlabel('Document Form')
+        plt.ylabel('Number of Documents')
+        plt.tight_layout()
+        plt.savefig('document_form_distribution.png')
+        plt.close()
+    
+    def temporal_analysis(self):
+        """
+        In-depth temporal analysis of documents
+        """
+        print("\n⏰ Temporal Analysis:")
         
-        print("\nYearly document counts:")
-        print(self.df['year'].value_counts().sort_index())
+        # Yearly document count
+        yearly_docs = self.df.groupby('year').size()
+        print("\nDocuments per Year:")
+        print(yearly_docs)
         
-        print("\nMost common authors:")
-        print(self.df['author'].value_counts().head())
-        
-        print("\nMost common forms:")
-        print(self.df['form'].value_counts().head())
-        
-        # Plot yearly trends
         plt.figure(figsize=(15, 6))
-        self.df['year'].value_counts().sort_index().plot(kind='bar')
+        yearly_docs.plot(kind='line', marker='o')
         plt.title('Number of Documents per Year')
         plt.xlabel('Year')
         plt.ylabel('Number of Documents')
-        plt.xticks(rotation=45)
         plt.tight_layout()
-        plt.show()
+        plt.savefig('documents_per_year.png')
+        plt.close()
+        
+        # Monthly distribution
+        monthly_docs = self.df.groupby('month').size()
+        plt.figure(figsize=(12, 6))
+        monthly_docs.plot(kind='bar')
+        plt.title('Document Distribution by Month')
+        plt.xlabel('Month')
+        plt.ylabel('Number of Documents')
+        plt.tight_layout()
+        plt.savefig('documents_per_month.png')
+        plt.close()
     
     def text_analysis(self):
-        """Analyze text content of documents."""
-        print("=== Text Analysis ===")
+        """
+        Comprehensive text analysis
+        """
+        print("\n📝 Text Analysis:")
         
-        # Calculate text lengths
-        self.df['text_length'] = self.df['full_text'].str.len()
-        self.df['word_count'] = self.df['full_text'].apply(
-            lambda x: len(word_tokenize(x)) if pd.notna(x) else 0
-        )
+        # Title length analysis
+        print("\nTitle Length Statistics:")
+        print(self.df['title_length'].describe())
         
-        print("\nText length statistics:")
-        print(self.df[['text_length', 'word_count']].describe())
-        
-        print("\nAverage text length by document type:")
-        print(self.df.groupby('document_type')['text_length'].mean().sort_values(ascending=False))
-        
-        # Plot text length distribution
         plt.figure(figsize=(12, 6))
-        sns.boxplot(data=self.df, x='document_type', y='text_length')
-        plt.xticks(rotation=45)
-        plt.title('Text Length Distribution by Document Type')
+        self.df.boxplot(column='title_length', by='document_form')
+        plt.title('Title Length by Document Form')
+        plt.suptitle('')  # Remove automatic suptitle
         plt.tight_layout()
-        plt.show()
+        plt.savefig('title_length_by_form.png')
+        plt.close()
         
-        # Create word cloud of titles
-        text = ' '.join(self.df['title'].dropna())
-        wordcloud = WordCloud(width=800, height=400, background_color='white').generate(text)
+        # Word cloud of titles
+        def preprocess_text(text):
+            # Lowercase and remove special characters
+            text = re.sub(r'[^a-zA-Z\s]', '', text.lower())
+            # Tokenize
+            tokens = word_tokenize(text)
+            # Remove stopwords
+            stop_words = set(stopwords.words('english'))
+            tokens = [w for w in tokens if w not in stop_words]
+            return ' '.join(tokens)
         
-        plt.figure(figsize=(15, 8))
+        titles_text = ' '.join(self.df['title'].dropna())
+        processed_titles = preprocess_text(titles_text)
+        
+        wordcloud = WordCloud(width=800, height=400, background_color='white').generate(processed_titles)
+        plt.figure(figsize=(16,8))
         plt.imshow(wordcloud, interpolation='bilinear')
         plt.axis('off')
         plt.title('Word Cloud of Document Titles')
-        plt.show()
+        plt.tight_layout()
+        plt.savefig('titles_wordcloud.png')
+        plt.close()
     
-    def eurovoc_analysis(self):
-        """Analyze eurovoc descriptors."""
-        print("=== EuroVoc Descriptor Analysis ===")
+    def eurovoc_descriptors_analysis(self):
+        """
+        Comprehensive analysis of EuroVoc descriptors
+        """
+        print("\n🏷️ EuroVoc Descriptors Analysis:")
         
-        # Calculate descriptor frequencies
-        all_descriptors = [desc for descs in self.df['eurovoc_descriptors'] for desc in descs]
-        descriptor_freq = Counter(all_descriptors)
+        # Explode descriptors
+        descriptors = self.df['eurovoc_descriptors'].str.split(',', expand=True).stack()
         
-        print("\nMost common EuroVoc descriptors:")
-        for desc, count in descriptor_freq.most_common(10):
-            print(f"{desc}: {count}")
+        # Top descriptors
+        top_descriptors = descriptors.value_counts().head(20)
+        print("\nTop 20 EuroVoc Descriptors:")
+        print(top_descriptors)
         
-        # Calculate average number of descriptors per document
-        self.df['descriptor_count'] = self.df['eurovoc_descriptors'].str.len()
-        print("\nDescriptor count statistics:")
-        print(self.df['descriptor_count'].describe())
-        
-        # Plot descriptor frequency distribution
-        plt.figure(figsize=(15, 6))
-        pd.Series(descriptor_freq).sort_values(ascending=False)[:20].plot(kind='bar')
+        plt.figure(figsize=(15, 7))
+        top_descriptors.plot(kind='bar')
         plt.title('Top 20 EuroVoc Descriptors')
         plt.xlabel('Descriptor')
         plt.ylabel('Frequency')
         plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
-        plt.show()
+        plt.savefig('top_eurovoc_descriptors.png')
+        plt.close()
     
-    def recommender_system_analysis(self):
-        """Analyze aspects relevant for building a recommender system."""
-        print("=== Recommender System Analysis ===")
+    def responsible_bodies_analysis(self):
+        """
+        Analysis of responsible bodies
+        """
+        print("\n🏢 Responsible Bodies Analysis:")
         
-        # Calculate descriptor co-occurrence matrix
-        descriptor_pairs = []
-        for descs in self.df['eurovoc_descriptors']:
-            for i, desc1 in enumerate(descs):
-                for desc2 in descs[i+1:]:
-                    descriptor_pairs.append(tuple(sorted([desc1, desc2])))
+        # Top responsible bodies
+        top_bodies = self.df['responsible_body'].value_counts().head(15)
+        print("\nTop 15 Responsible Bodies:")
+        print(top_bodies)
         
-        cooccurrence = Counter(descriptor_pairs)
-        print("\nMost common descriptor pairs:")
-        for pair, count in cooccurrence.most_common(10):
-            print(f"{pair}: {count}")
-        
-        # Analyze temporal patterns
-        self.df['year_month'] = self.df['date_document'].dt.to_period('M')
-        temporal_patterns = self.df.groupby(['year_month', 'document_type']).size().unstack(fill_value=0)
-        
-        plt.figure(figsize=(15, 6))
-        temporal_patterns.plot(kind='line')
-        plt.title('Document Type Trends Over Time')
-        plt.xlabel('Year-Month')
+        plt.figure(figsize=(15, 7))
+        top_bodies.plot(kind='bar')
+        plt.title('Top 15 Responsible Bodies')
+        plt.xlabel('Body')
         plt.ylabel('Number of Documents')
-        plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
-        plt.show()
-        
-        # Calculate document similarity distribution based on shared descriptors
-        print("\nCalculating document similarity distribution...")
-        sample_size = min(1000, len(self.df))  # Use a sample for large datasets
-        sample_df = self.df.sample(sample_size)
-        
-        similarity_scores = []
-        for i, row1 in enumerate(tqdm(sample_df.itertuples(), total=sample_size)):
-            for row2 in sample_df.itertuples():
-                if row1.Index < row2.Index:
-                    common_descriptors = len(
-                        set(row1.eurovoc_descriptors) & 
-                        set(row2.eurovoc_descriptors)
-                    )
-                    if common_descriptors > 0:
-                        similarity_scores.append(common_descriptors)
-        
-        plt.figure(figsize=(10, 6))
-        plt.hist(similarity_scores, bins=20)
-        plt.title('Distribution of Document Similarities\n(Based on Shared Descriptors)')
-        plt.xlabel('Number of Shared Descriptors')
-        plt.ylabel('Frequency')
-        plt.tight_layout()
-        plt.show()
+        plt.savefig('top_responsible_bodies.png')
+        plt.close()
     
-    def run_complete_analysis(self):
-        """Run all analyses in sequence."""
-        print("Starting complete EURLex dataset analysis...")
-        self.create_database()
-        self.load_dataframe()
-        self.basic_statistics()
+    def comprehensive_analysis(self):
+        """
+        Run all analysis methods
+        """
+        self.basic_dataset_overview()
+        self.temporal_analysis()
         self.text_analysis()
-        self.eurovoc_analysis()
-        self.recommender_system_analysis()
-        print("\nAnalysis complete!")
+        self.eurovoc_descriptors_analysis()
+        self.responsible_bodies_analysis()
+    
+    def __del__(self):
+        """
+        Close database connection
+        """
+        self.conn.close()
 
-if __name__ == "__main__":
-    eda = EURLexEDA()
-    eda.run_complete_analysis()
+def main():
+    eda = EurLexEDA()
+    eda.comprehensive_analysis()
+
+if __name__ == '__main__':
+    main()

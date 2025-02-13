@@ -17,3 +17,8 @@ loguru==0.7.2
 lxml==4.9.3  # Required for better HTML parsing
 aiohttp==3.9.1  # For async HTTP requests
 typing-extensions==4.8.0  # For type hints
+
+# Data analysis dependencies
+pandas==2.2.0
+seaborn==0.13.2
+numpy==1.26.3
