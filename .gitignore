@@ -9,7 +9,7 @@ env/
 .venv/
 .env/
 
-# Data directories (large files/datasets)
+# Data directories
 data/
 *.json
 *.csv
@@ -46,10 +46,6 @@ dist/
 *.tmp
 *.bak
 *~
-
-# Notebooks directory
-notebooks/
-*.ipynb
 
 # Specific to this project
 output/
