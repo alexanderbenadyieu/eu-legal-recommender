@@ -51,8 +51,3 @@ dist/
 output/
 cache/
 temp/
-scraper/
-summarization/
-recommender/
-docs/
-notebooks/

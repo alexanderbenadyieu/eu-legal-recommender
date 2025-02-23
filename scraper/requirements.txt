@@ -1,0 +1,24 @@
+# Testing dependencies
+pytest==7.4.4
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+hypothesis==6.88.1  # For property-based testing
+
+# Existing dependencies
+requests==2.31.0
+beautifulsoup4==4.12.2
+pyyaml==6.0.1
+fake-useragent==1.4.0
+tenacity==8.2.3
+python-dateutil==2.8.2
+jsonschema==4.20.0
+prometheus-client==0.19.0
+loguru==0.7.2
+lxml==4.9.3  # Required for better HTML parsing
+aiohttp==3.9.1  # For async HTTP requests
+typing-extensions==4.8.0  # For type hints
+
+# Data analysis dependencies
+pandas==2.2.0
+seaborn==0.13.2
+numpy==1.26.3
