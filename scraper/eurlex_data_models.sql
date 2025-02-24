@@ -14,7 +14,8 @@ CREATE TABLE documents (
     date_of_document        DATE, -- Fecha en la que se tramitó el documento
     date_of_effect          DATE, -- Empieza a ser vinculante
     date_of_end_validity    DATE, -- Deja de ser vinculante
-    content                 TEXT -- Texto de la iniciativa
+    content                 TEXT, -- Raw HTML content of the document
+    html_content            TEXT  -- Full HTML content of the document
 
     FOREIGN KEY (responsible_body_id)
         REFERENCES responsible_bodies(body_id)
@@ -25,8 +26,10 @@ CREATE TABLE documents (
         ON DELETE SET NULL
 );
 
+
+
 -- =======================
--- 1.1 look-up tables form and responsible body
+-- 1.2 look-up tables form and responsible body
 -- =======================
 
 CREATE TABLE forms (

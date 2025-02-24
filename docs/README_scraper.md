@@ -16,6 +16,8 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
   - Publication dates and legal dates
   - Authors and responsible bodies
   - EuroVoc descriptors and subject matters
+  - Full HTML content preservation
+  - Raw and processed text content
 
 - **Efficient Storage**
   - Organized hierarchical storage structure (year/month/day)
@@ -34,6 +36,10 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
 2. **Parsers (`parsers.py`)**
    - `MetadataParser`: Extracts structured metadata from document pages
    - `DocumentParser`: Processes document content and formats
+   - `HTMLParser`: Handles HTML content
+     - Preserves complete HTML structure
+     - Extracts clean text content
+     - Maintains document formatting
    - Handles complex HTML structures using BeautifulSoup
    - Implements robust error handling for malformed content
 

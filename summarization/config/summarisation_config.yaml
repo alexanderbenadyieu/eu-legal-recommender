@@ -1,0 +1,47 @@
+# Summarisation Configuration
+
+# Global settings
+chunk_size: 250
+
+# Extraction percentages for chunk-based extraction. For the first five chunks, use explicit percentages. Beyond that, default to 0.125.
+extraction_percentages:
+  - 0.34
+  - 0.30
+  - 0.245
+  - 0.20
+  - 0.165
+default_extraction_percentage: 0.125
+
+# Tier 1 settings (0–600 words)
+tier1:
+  thresholds:
+    short: 150
+    medium: 300
+  summary_ranges:
+    short: [15, 50]
+    medium: [50, 100]
+    long: [100, 200]
+
+# Tier 2 settings (600–2,500 words)
+tier2:
+  extraction:
+    min: 300
+    max: 600
+    ratio: 0.3
+  summary_multiplier:
+    min: 0.6
+    max: 0.8
+
+# Tier 3 settings (2,500–20,000 words)
+tier3:
+  final_extraction_target: 1500
+  final_abstractive:
+    min: 480
+    max: 600
+
+# Tier 4 settings (20,000–68,000 words)
+tier4:
+  final_extraction_target: 2500
+  final_abstractive:
+    min: 600
+    max: 800
