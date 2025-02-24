@@ -70,53 +70,38 @@ class LexLMExtractor:
         
         return scores
 
-def lexlm_extract(text: str, target_length: int) -> str:
-    """Extract most relevant sentences from text using LexLM model.
-    
-    Args:
-        text: Input text to extract from
-        target_length: Target length of extraction in words
-    
-    Returns:
-        str: Extracted text containing most relevant sentences
-    """
-    print(f"\nExtractive summarization debug:")
-    print(f"Input text length: {len(text.split())} words")
-    
-    # Split text into sentences
-    sentences = sent_tokenize(text)
-    print(f"Number of sentences: {len(sentences)}")
-    
-    # Initialize extractor
-    extractor = LexLMExtractor()
-    
-    # Score sentences
-    scores = extractor.score_sentences(sentences)
-    print(f"Sentence scores range: {min(scores):.4f} to {max(scores):.4f}")
-    
-    # Sort sentences by score
-    sentence_scores = list(zip(sentences, scores))
-    sentence_scores.sort(key=lambda x: x[1], reverse=True)
-    
-    # Select sentences until we reach target length
-    selected_sentences = []
-    current_length = 0
-    
-    for sentence, score in sentence_scores:
-        sentence_length = len(sentence.split())
-        if current_length + sentence_length <= target_length:
-            selected_sentences.append(sentence)
-            current_length += sentence_length
-            print(f"Selected sentence (score={score:.4f}): {sentence[:100]}...")
-        else:
-            break
-    
-    print(f"Selected {len(selected_sentences)} sentences, total length: {current_length} words")
-    
-    # Sort selected sentences by their original order
-    selected_sentences.sort(key=lambda x: sentences.index(x))
-    
-    # Join sentences
-    return ' '.join(selected_sentences)
-    
-    return " ".join(selected_sentences)
+    def extract_key_sentences(self, text: str, chunk_index: int = 0) -> str:
+        """Extract most relevant sentences from text using LexLM model.
+        
+        Args:
+            text: Input text to extract from
+            chunk_index: Index of the current chunk (0-based) to determine extraction percentage
+            
+        Returns:
+            str: Extracted text containing most relevant sentences
+        """
+        # Extraction percentages based on chunk index
+        extraction_percentages = [0.34, 0.30, 0.245, 0.20, 0.165]
+        default_percentage = 0.125
+        
+        # Get appropriate extraction percentage
+        extraction_percentage = extraction_percentages[chunk_index] if chunk_index < len(extraction_percentages) else default_percentage
+        
+        # Split text into sentences
+        sentences = sent_tokenize(text)
+        
+        # Score sentences
+        scores = self.score_sentences(sentences)
+        
+        # Sort sentences by score
+        sentence_scores = list(zip(sentences, scores))
+        sentence_scores.sort(key=lambda x: x[1], reverse=True)
+        
+        # Select top sentences based on chunk-specific percentage
+        num_sentences = max(1, int(len(sentences) * extraction_percentage))
+        selected_sentences = [s[0] for s in sentence_scores[:num_sentences]]
+        
+        # Sort selected sentences by their original order
+        selected_sentences.sort(key=lambda x: sentences.index(x))
+        
+        return ' '.join(selected_sentences)

@@ -2,109 +2,69 @@
 
 import re
 from typing import List
-import nltk
-from nltk.tokenize import sent_tokenize
 
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
-
-def split_into_sentences(text: str) -> List[str]:
-    """Split text into sentences using NLTK's punkt tokenizer."""
-    return sent_tokenize(text)
-
-def get_section_boundaries(text: str) -> List[int]:
-    """Find potential section boundaries in legal text.
+def split_by_separator(text: str, separator: str, max_chunk_size: int) -> List[str]:
+    """Split text by a given separator pattern."""
+    # Use regex split
+    segments = re.split(f'({separator})', text)
     
-    Looks for common legal document section markers like:
-    - Article X
-    - Section X
-    - Chapter X
-    - Numbered lists (1., 2., etc.)
-    """
-    patterns = [
-        r'Article \d+',
-        r'Section \d+',
-        r'Chapter \d+',
-        r'\n\d+\.',  # Numbered lists
-        r'\([a-z]\)',  # (a), (b), etc.
-        r'\n[A-Z][A-Z\s]+[A-Z]\n'  # All caps headers
-    ]
+    # Recombine segments with their separators
+    segments = [segments[i] + (segments[i+1] if i+1 < len(segments) else '') 
+               for i in range(0, len(segments), 2)]
     
-    boundaries = []
-    for pattern in patterns:
-        for match in re.finditer(pattern, text):
-            boundaries.append(match.start())
+    # Combine segments while respecting max_chunk_size
+    chunks = []
+    current_chunk = ""
     
-    return sorted(list(set(boundaries)))
+    for segment in segments:
+        if len(current_chunk) + len(segment) > max_chunk_size and current_chunk:
+            chunks.append(current_chunk.strip())
+            current_chunk = segment
+        else:
+            current_chunk += segment
+    
+    if current_chunk:
+        chunks.append(current_chunk.strip())
+    
+    return chunks
 
-def chunk_text(text: str, target_chunk_size: int, overlap: int = 50, max_words: int = 300) -> List[str]:
-    """Split text into chunks respecting sentence and section boundaries.
+def chunk_text(text: str, max_chunk_size: int) -> List[str]:
+    """Split text into chunks using a priority list of separators.
     
     Args:
         text: Text to split
-        target_chunk_size: Target size of each chunk in words
-        overlap: Number of words to overlap between chunks
+        max_chunk_size: Maximum size of each chunk in characters
     
     Returns:
         List of text chunks
     """
-    # Get sentences and their word counts
-    sentences = split_into_sentences(text)
-    sentence_word_counts = [len(sent.split()) for sent in sentences]
+    # If text is already small enough, return it as is
+    if len(text) <= max_chunk_size:
+        return [text]
     
-    # Get section boundaries
-    section_starts = get_section_boundaries(text)
+    # List of separators in order of priority
+    separators = [
+        "\n",      # Newlines first
+        "\t",      # Then tabs
+        "[...]",   # Special markers
+        ".\\s+",    # Sentences (period followed by whitespace)
+        "(?<=[?!])",  # Question/exclamation marks (lookbehind)
+        "...",     # Ellipsis
+        ";",       # Semicolons
+        ":",       # Colons
+        " - "      # Dashes with spaces
+    ]
     
-    # Create chunks
+    # Try each separator in order until we get chunks that are small enough
+    for separator in separators:
+        chunks = split_by_separator(text, separator, max_chunk_size)
+        if all(len(chunk) <= max_chunk_size for chunk in chunks):
+            return chunks
+    
+    # If no separator worked well, fall back to character-level chunking
     chunks = []
-    current_chunk = []
-    current_word_count = 0
-    last_section_start = 0
-    
-    for i, (sentence, word_count) in enumerate(zip(sentences, sentence_word_counts)):
-        # Check if sentence starts a new section
-        sentence_start = text.find(sentence, last_section_start)
-        if any(abs(section_start - sentence_start) < 10 for section_start in section_starts):
-            # If we have a non-empty chunk and hit a section boundary, start a new chunk
-            if current_chunk:
-                chunks.append(" ".join(current_chunk))
-                # Add overlap by keeping some sentences from previous chunk
-                overlap_sentences = []
-                overlap_words = 0
-                for sent in reversed(current_chunk):
-                    if overlap_words + len(sent.split()) > overlap:
-                        break
-                    overlap_sentences.insert(0, sent)
-                    overlap_words += len(sent.split())
-                current_chunk = overlap_sentences
-                current_word_count = overlap_words
-        
-        # Add sentence to current chunk
-        current_chunk.append(sentence)
-        current_word_count += word_count
-        
-        # If chunk is full or would exceed max words, start a new one
-        if current_word_count >= target_chunk_size or current_word_count >= max_words:
-            chunks.append(" ".join(current_chunk))
-            # Add overlap
-            overlap_sentences = []
-            overlap_words = 0
-            for sent in reversed(current_chunk):
-                if overlap_words + len(sent.split()) > overlap:
-                    break
-                overlap_sentences.insert(0, sent)
-                overlap_words += len(sent.split())
-            current_chunk = overlap_sentences
-            current_word_count = overlap_words
-        
-        last_section_start = sentence_start + len(sentence)
-    
-    # Add final chunk if non-empty
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
-    
+    for i in range(0, len(text), max_chunk_size):
+        chunks.append(text[i:i + max_chunk_size])
     return chunks
 
 def get_chunk_size(text_length: int) -> int:
