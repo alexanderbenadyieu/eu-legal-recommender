@@ -24,13 +24,61 @@ class LegalDocumentParser:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
     
+    def _is_regulatory_annex(self, element) -> bool:
+        """Check if an element is a regulatory annex section.
+        
+        Regulatory annexes are identified by:
+        1. Having class 'oj-doc-ti'
+        2. Title matching pattern 'ANNEX [IVX]+'
+        """
+        if 'oj-doc-ti' not in element.get('class', []):
+            return False
+            
+        title = element.get_text().strip()
+        return bool(re.match(r'^ANNEX [IVX]+$', title))
+
+    def _is_valid_section(self, text: str) -> bool:
+        """Check if a section contains meaningful content.
+        
+        A section is considered invalid if it:
+        1. Is empty or only whitespace
+        2. Contains only numbers and punctuation
+        3. Has no actual words (just special characters)
+        """
+        if not text or not text.strip():
+            return False
+            
+        # Check if text contains at least one word (sequence of letters)
+        has_words = bool(re.search(r'[a-zA-Z]{2,}', text))
+        if not has_words:
+            return False
+            
+        # Check if text is just numbers and punctuation
+        only_nums_punct = bool(re.match(r'^[\d\s.,;:!?()\[\]{}"\`~@#$%^&*+=|\\/<>-]*$', text))
+        if only_nums_punct:
+            return False
+            
+        return True
+
     def _clean_text(self, text: str) -> str:
-        """Clean text by removing extra whitespace and special characters"""
-        # Remove multiple spaces and newlines
-        text = re.sub(r'\s+', ' ', text)
-        # Keep all characters except truly unwanted ones
+        """Clean text by removing URLs and unwanted characters while preserving basic structure."""
+        if not text:
+            return ""
+            
+        # Remove URLs
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+        text = re.sub(r'www\.(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+
+        # Remove unwanted control characters
         text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', text)
-        return text.strip()
+
+        # Remove multiple whitespace while preserving newlines
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        text = re.sub(r'\n\s+', '\n', text)
+
+        cleaned = text.strip()
+        return cleaned if self._is_valid_section(cleaned) else ""
     
     def _remove_unwanted_elements(self, soup: BeautifulSoup) -> None:
         """Remove unwanted elements from the soup"""
@@ -39,7 +87,6 @@ class LegalDocumentParser:
             'oj-note',      # Notes/footnotes
             'oj-hd-lg',     # Language indicator
             'oj-final',     # Final section
-            'oj-hd-ti',     # Title header
             'oj-hd-coll',   # Collection header
             'oj-hd-uniq',   # Unique identifier
             'oj-hd-date',   # Date header
@@ -49,24 +96,52 @@ class LegalDocumentParser:
             for element in soup.find_all(class_=class_name):
                 element.decompose()
 
+    def _extract_numbered_paragraph(self, table) -> str:
+        """Extract content from a table containing a numbered paragraph."""
+        # Find the number in the first cell
+        number_cell = table.find('td')
+        if not number_cell:
+            return ""
+            
+        number = number_cell.get_text().strip()
+        
+        # Find the content in the second cell
+        content_cell = table.find_all('td')[1] if len(table.find_all('td')) > 1 else None
+        if not content_cell:
+            return ""
+            
+        # Remove any footnote references
+        for note in content_cell.find_all(['a', 'span'], class_='oj-note-tag'):
+            note.decompose()
+            
+        content = content_cell.get_text().strip()
+        
+        if content:
+            return f"{number} {content}"
+        return ""
+
     def _extract_table_content(self, table) -> str:
         """Extract meaningful text content from a table"""
+        # Check if this is a numbered paragraph table (has 2 columns, first is narrow)
+        cols = table.find_all('col')
+        if len(cols) == 2 and any('4%' in col.get('width', '') for col in cols):
+            return self._extract_numbered_paragraph(table)
+            
+        # Otherwise process as regular table
         content_parts = []
-        
-        # Process each row
         for row in table.find_all('tr'):
             row_parts = []
-            # Get all cells (both header and data cells)
             cells = row.find_all(['td', 'th'])
             
             for cell in cells:
-                # Skip cells that only contain numbers or are empty
+                # Remove any footnote references
+                for note in cell.find_all(['a', 'span'], class_='oj-note-tag'):
+                    note.decompose()
+                    
                 cell_text = self._clean_text(cell.get_text())
                 if cell_text and not cell_text.isdigit():
-                    # Check if it's a paragraph cell
-                    if cell.find('p', class_='oj-normal'):
+                    if cell.find('p', class_='oj-normal') or cell.find('span'):
                         row_parts.append(cell_text)
-                    # For definition-style tables, include both number and content
                     elif len(cells) > 1:
                         row_parts.append(cell_text)
             
@@ -75,53 +150,191 @@ class LegalDocumentParser:
         
         return '\n'.join(content_parts)
     
-    def parse_html_content(self, html_content: str) -> List[DocumentSection]:
-        """Parse HTML content and extract structured sections"""
-        soup = BeautifulSoup(html_content, 'html.parser')
-        sections = []
+    def parse_html_content(self, html_content: str, save_path: Optional[Path] = None) -> List[DocumentSection]:
+        """Parse HTML content and extract structured sections.
         
-        # Remove unwanted elements
+        Args:
+            html_content: Raw HTML content to parse
+            save_path: Optional path to save preprocessed text
+            
+        Returns:
+            List of DocumentSection objects containing valid sections only
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # Remove unwanted elements first
         self._remove_unwanted_elements(soup)
         
-        # Extract main title
+        # Process sections in order of document structure
+        processed_sections = []
+        
+        # 1. Main title
         main_title = soup.find('div', class_='eli-main-title')
         if main_title:
-            sections.append(DocumentSection(
-                title="Document Title",
-                content=self._clean_text(main_title.get_text()),
-                section_type="header"
-            ))
+            title_text = self._clean_text(main_title.get_text())
+            if title_text:  # Only add if valid
+                title_section = DocumentSection(
+                    title="Document Title",
+                    content=title_text,
+                    section_type="header"
+                )
+                processed_sections.append(title_section)
         
-        # Find all section titles (including articles)
-        section_titles = soup.find_all(['p', 'div'], class_=['oj-ti-grseq-1', 'oj-ti-art'])
+        # 2. Preamble
+        preamble = soup.find('div', class_='eli-preamble')
+        if preamble:
+            preamble_text = self._clean_text(preamble.get_text())
+            if preamble_text:  # Only add if valid
+                preamble_section = DocumentSection(
+                    title="Preamble",
+                    content=preamble_text,
+                    section_type="preamble"
+                )
+                processed_sections.append(preamble_section)
         
-        for title_elem in section_titles:
-            title_text = self._clean_text(title_elem.get_text())
+        # 3. Process eli-container and its subdivisions
+        eli_container = soup.find('div', class_='eli-container')
+        if eli_container:
             content_parts = []
             
-            # Get all following siblings until the next section title
-            current = title_elem.find_next_sibling()
-            while current and not (current.name == 'p' and 
-                                 ('oj-ti-grseq-1' in current.get('class', []) or 
-                                  'oj-ti-art' in current.get('class', []))):
-                if current.name == 'p' and 'oj-normal' in current.get('class', []):
-                    text = self._clean_text(current.get_text())
+            # Process all eli-subdivisions
+            # Process enumerated paragraphs
+            for enum_div in eli_container.find_all('div', class_='oj-enumeration-spacing', recursive=True):
+                # Get all inline text
+                text_parts = []
+                for p in enum_div.find_all('p', style='display: inline;'):
+                    text = self._clean_text(p.get_text())
                     if text:
-                        content_parts.append(text)
-                elif current.name == 'table':
-                    table_content = self._extract_table_content(current)
+                        text_parts.append(text)
+                if text_parts:
+                    content_parts.append(' '.join(text_parts))
+
+            # Process subdivisions as before
+            for subdivision in eli_container.find_all('div', class_='eli-subdivision', recursive=True):
+                # Skip footnotes
+                if subdivision.find(class_='oj-note'):
+                    continue
+                    
+                # Process direct oj-normal paragraphs
+                for p in subdivision.find_all('p', class_='oj-normal', recursive=False):
+                    content = self._clean_text(p.get_text())
+                    if content:
+                        content_parts.append(content)
+                
+                # Process tables (which might contain numbered paragraphs)
+                for table in subdivision.find_all('table', recursive=False):
+                    table_content = self._extract_table_content(table)
                     if table_content:
                         content_parts.append(table_content)
-                current = current.find_next_sibling()
+                        
+                # Process direct span elements (sometimes used for content)
+                for span in subdivision.find_all('span', recursive=False):
+                    if not span.find_parent(class_='oj-note-tag'):
+                        content = self._clean_text(span.get_text())
+                        if content:
+                            content_parts.append(content)
             
-            if content_parts:  # Only add sections with content
-                sections.append(DocumentSection(
-                    title=title_text,
-                    content='\n'.join(content_parts),
-                    section_type="article" if 'oj-ti-art' in title_elem.get('class', []) else "section"
-                ))
+            # Also process any direct oj-normal paragraphs in the eli-container
+            for p in eli_container.find_all('p', class_='oj-normal', recursive=False):
+                content = self._clean_text(p.get_text())
+                if content:
+                    content_parts.append(content)
+            
+            if content_parts:  # Only create section if we found content
+                content = '\n'.join(content_parts)
+                if self._is_valid_section(content):
+                    section = DocumentSection(
+                        title="Main Content",
+                        content=content,
+                        section_type="main"
+                    )
+                    processed_sections.append(section)
         
-        return sections
+        # 4. Main sections and articles (excluding regulatory annexes)
+        processed_elements = set()  # Keep track of elements we've processed
+        
+        # Find all top-level sections
+        for section_type in ['oj-ti-grseq-1', 'oj-ti-art', 'oj-ti-section', 'oj-ti-chapter']:
+            for section_elem in soup.find_all(class_=section_type):
+                # Skip if already processed or is a regulatory annex
+                if section_elem in processed_elements or self._is_regulatory_annex(section_elem):
+                    continue
+                    
+                # Get section title and ensure it's valid
+                title = self._clean_text(section_elem.get_text())
+                if not title:  # Skip sections with invalid titles
+                    continue
+                    
+                # Get section content until next section
+                content_parts = []
+                current = section_elem.find_next_sibling()
+                
+                while current and not any(cls in current.get('class', []) for cls in 
+                                         ['oj-ti-grseq-1', 'oj-ti-art', 'oj-ti-section', 'oj-ti-chapter']):
+                    
+                    # Skip if this element has already been processed or is a nested section
+                    if current in processed_elements or current.find_parent(class_=['oj-ti-grseq-1', 'oj-ti-art', 'oj-ti-section', 'oj-ti-chapter']):
+                        current = current.find_next_sibling()
+                        continue
+                        
+                    # Mark this element as processed
+                    processed_elements.add(current)
+                    
+                    # Handle tables specially
+                    if current.name == 'table':
+                        table_text = self._extract_table_content(current)
+                        if table_text:  # Only add valid table content
+                            content_parts.append(table_text)
+                    else:
+                        # Check if this is an AR section
+                        is_ar = any('AR' in node.strip() for node in current.stripped_strings)
+                        
+                        # Get text from this element and its children
+                        for text_node in current.stripped_strings:
+                            text = self._clean_text(text_node)
+                            if text and (not is_ar or not any(p.strip().startswith('AR') for p in content_parts)):
+                                content_parts.append(text)
+                                
+                    current = current.find_next_sibling()
+                
+                # Create section only if we have valid content
+                if content_parts:
+                    # Remove duplicates while preserving order
+                    seen = set()
+                    deduped_parts = []
+                    for part in content_parts:
+                        if part not in seen:
+                            seen.add(part)
+                            deduped_parts.append(part)
+                    
+                    content = '\n'.join(filter(None, deduped_parts))  # Remove any empty strings
+                    if self._is_valid_section(content):  # Validate combined content
+                        section = DocumentSection(
+                            title=title,
+                            content=content,
+                            section_type=section_type
+                        )
+                        processed_sections.append(section)
+                        
+                # Mark the section element itself as processed
+                processed_elements.add(section_elem)
+        
+        # Save preprocessed text if path provided
+        if save_path:
+            preprocessed_text = {
+                'sections': [
+                    {
+                        'title': section.title,
+                        'content': section.content,
+                        'type': section.section_type
+                    } for section in processed_sections
+                ]
+            }
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(preprocessed_text, f, indent=2, ensure_ascii=False)
+        
+        return processed_sections
     
     def process_file(self, file_path: str) -> Optional[Dict]:
         """Process a single JSON file and extract structured content"""

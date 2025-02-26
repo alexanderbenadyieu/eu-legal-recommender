@@ -1,22 +1,20 @@
 import sqlite3
+import logging
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
+logger = logging.getLogger(__name__)
+
 @dataclass
 class Document:
-    document_id: int
+    id: int
     celex_number: str
-    title: str
-    identifier: Optional[str]
-    eli_uri: Optional[str]
     html_url: Optional[str]
-    pdf_url: Optional[str]
-    date_of_document: Optional[datetime]
-    date_of_effect: Optional[datetime]
-    date_of_end_validity: Optional[datetime]
-    content: str
-    content_html: str
+    total_words: Optional[int]
+    summary: Optional[str]
+    summary_word_count: Optional[int]
+    compression_ratio: Optional[float]
 
 class DatabaseConnection:
     def __init__(self, db_path: str):
@@ -30,57 +28,54 @@ class DatabaseConnection:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.conn.close()
 
-def load_documents(db_path: str, limit: Optional[int] = None) -> List[Document]:
+def load_documents(db_path: str, limit: Optional[int] = None, filter_tier1: bool = False) -> List[Document]:
     """
     Load documents from the SQLite database.
     
     Args:
         db_path: Path to the SQLite database
         limit: Optional limit on number of documents to retrieve
+        filter_tier1: If True, only load Tier 1 documents (≤ 600 words)
         
     Returns:
         List of Document objects
     """
+    logger.info(f"Loading documents from {db_path}")
     with DatabaseConnection(db_path) as conn:
         query = """
             SELECT 
-                document_id,
+                id,
                 celex_number,
-                title,
-                identifier,
-                eli_uri,
                 html_url,
-                pdf_url,
-                date_of_document,
-                date_of_effect,
-                date_of_end_validity,
-                content,
-                content_html
-            FROM documents
-            WHERE content_html IS NOT NULL
+                total_words,
+                summary,
+                summary_word_count,
+                compression_ratio
+            FROM processed_documents
         """
+        logger.debug(f"Base query: {query}")
+        
+        if filter_tier1:
+            query += " WHERE total_words <= 600 AND total_words > 0"
+            logger.info("Filtering for Tier 1 documents (≤ 600 words)")
         
         if limit:
             query += f" LIMIT {limit}"
             
         cursor = conn.execute(query)
         rows = cursor.fetchall()
+        logger.info(f"Found {len(rows)} documents")
         
         documents = []
         for row in rows:
             doc = Document(
-                document_id=row['document_id'],
+                id=row['id'],
                 celex_number=row['celex_number'],
-                title=row['title'],
-                identifier=row['identifier'],
-                eli_uri=row['eli_uri'],
                 html_url=row['html_url'],
-                pdf_url=row['pdf_url'],
-                date_of_document=datetime.strptime(row['date_of_document'], '%Y-%m-%d') if row['date_of_document'] else None,
-                date_of_effect=datetime.strptime(row['date_of_effect'], '%Y-%m-%d') if row['date_of_effect'] else None,
-                date_of_end_validity=datetime.strptime(row['date_of_end_validity'], '%Y-%m-%d') if row['date_of_end_validity'] else None,
-                content=row['content'],
-                content_html=row['content_html']
+                total_words=row['total_words'],
+                summary=row['summary'],
+                summary_word_count=row['summary_word_count'],
+                compression_ratio=row['compression_ratio']
             )
             documents.append(doc)
             
