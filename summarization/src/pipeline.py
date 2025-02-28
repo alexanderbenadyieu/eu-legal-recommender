@@ -93,11 +93,22 @@ class SummarizationPipeline:
         max_summary_length = int(0.8 * extracted_words)  # 0.8K
         logger.info(f"Generating abstractive summary (target length: {min_summary_length}-{max_summary_length} words)")
         
-        summary = self.generator.summarize(
-            extracted,
-            min_length=min_summary_length,
-            max_length=max_summary_length
-        )
+        # Get appropriate model parameters based on word count
+        min_length, max_length = self.generator._get_tier_parameters(extracted_words)
+        
+        # Ensure extracted text fits within BART's context window (1024 tokens)
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
+        tokens = tokenizer(extracted, truncation=True, max_length=1024, return_tensors="pt")
+        truncated_text = tokenizer.decode(tokens["input_ids"][0], skip_special_tokens=True)
+        
+        # Generate summary using the tier2 model
+        summary = self.generator.tier2_model(
+            truncated_text,
+            min_length=min_length,
+            max_length=max_length,
+            do_sample=False
+        )[0]['summary_text']
         
         # Update document with summary statistics
         summary_words = len(word_tokenize(summary))
@@ -153,7 +164,7 @@ class SummarizationPipeline:
         logger.info("Loading documents from database...")
         
         # Construct SQL query based on tier
-        query = "SELECT * FROM processed_documents WHERE 1=1"
+        query = "SELECT * FROM processed_documents WHERE summary IS NULL"
         params = []
         
         if tier == 1:

@@ -12,7 +12,7 @@ def get_tokenizer():
     """Get or initialize the LexLM tokenizer."""
     global _tokenizer
     if _tokenizer is None:
-        _tokenizer = AutoTokenizer.from_pretrained('lexlm/legal-roberta-base')
+        _tokenizer = AutoTokenizer.from_pretrained('lexlms/legal-roberta-large')
     return _tokenizer
 
 def chunk_text(text: str, max_tokens: int = 514) -> List[str]:
