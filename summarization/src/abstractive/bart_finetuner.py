@@ -22,10 +22,17 @@ class BartFineTuner:
                 device=-1
             )
             
-            # Tier 3/4 model (2500+ words)
+            # Tier 3/4 model for final summaries (2500+ words)
             self.tier3_model = pipeline(
                 'summarization',
-                model="MikaSie/LexLM_Longformer_BART_hybrid_V1",
+                model="MikaSie/LexLM_BART_hybrid_V1",  # Same as Tier 2
+                device=-1
+            )
+            
+            # Tier 4 section-level model
+            self.tier4_section_model = pipeline(
+                'summarization',
+                model="facebook/bart-base",
                 device=-1
             )
             
@@ -114,4 +121,37 @@ class BartFineTuner:
             
         except Exception as e:
             logger.error(f"Error generating summary: {str(e)}")
+            return text  # Return original text on error
+            
+    def summarize_tier4_section(self, text: str, max_length: int = 350) -> str:
+        """Generate section-level summary for Tier 4 using BART-base.
+        
+        Args:
+            text: Text to summarize
+            max_length: Maximum length of summary in words
+            
+        Returns:
+            Generated summary
+        """
+        try:
+            if not text:
+                logger.warning("Empty input text for Tier 4 section")
+                return text
+
+            # Generate summary using BART-base
+            result = self.tier4_section_model(
+                text,
+                min_length=int(max_length * 0.8),
+                max_length=max_length,
+                truncation=True
+            )
+            
+            if not result or len(result) == 0:
+                logger.warning("No Tier 4 section summary generated, returning original text")
+                return text
+                
+            return result[0]['summary_text']
+            
+        except Exception as e:
+            logger.error(f"Error generating Tier 4 section summary: {str(e)}")
             return text  # Return original text on error

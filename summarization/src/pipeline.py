@@ -118,23 +118,98 @@ class SummarizationPipeline:
         
         return summary
 
-    def _process_tier_3(self, text: str) -> str:
-        """Process Tier 3 document (2,500-20,000 words) - Hierarchical summarization."""
-        # Step 1: Split into chunks
-        chunks = chunk_text(text, max_chunk_size=self.config['max_chunk_size'])
+    def _process_tier_3(self, document: Document, cursor: sqlite3.Cursor) -> str:
+        """Process Tier 3 document (2,500-20,000 words) - Hierarchical summarization.
         
-        # Step 2: Extract from each chunk
-        extracted_chunks = []
-        for chunk in chunks:
-            extracted = self.extractor.extract_key_sentences(chunk, tier=3)
-            extracted_chunks.append(extracted)
+        This implements the new section-aware hierarchical summarization process:
+        1. Process each section to target length (~350 words)
+        2. Apply weighted compression to reach intermediate target (600-750 words)
+        3. Generate final abstractive summary (480-600 words)
+        """
+        from .utils.tier3_utils import Section, process_section, refine_extraction
+        from nltk.tokenize import word_tokenize
         
-        # Step 3: Combine and extract again
-        combined = '\n'.join(extracted_chunks)
-        final_extraction = self.extractor.extract_key_sentences(combined, tier=3)
+        logger.info(f"Processing Tier 3 document {document.celex_number} using section-aware approach")
         
-        # Step 4: Final abstractive summary
-        return self.generator.summarize(final_extraction)
+        # Get document sections from database
+        cursor.execute("""
+            SELECT id, title, content, section_type, section_order, word_count 
+            FROM document_sections 
+            WHERE document_id = ? 
+            ORDER BY section_order""", 
+            (document.id,)
+        )
+        sections_data = cursor.fetchall()
+        
+        if not sections_data:
+            logger.warning(f"No sections found for document {document.celex_number}")
+            return ""
+            
+        # Convert to Section objects
+        sections = [
+            Section(id=row[0], title=row[1], content=row[2], 
+                   section_type=row[3], section_order=row[4], 
+                   word_count=row[5])
+            for row in sections_data
+        ]
+        
+        # Step 1: Process each section
+        logger.info(f"Processing {len(sections)} sections")
+        all_chunks = []
+        for section in sections:
+            processed_chunks = process_section(section)
+            all_chunks.extend(processed_chunks)
+            
+        # Step 2: Refine to reach target length (600-750 words)
+        target_length = 700  # Target middle of 600-750 range
+        logger.info(f"Refining extraction to target length of {target_length} words")
+        
+        chunk_extractions = refine_extraction(all_chunks, target_length)
+        
+        # Extract from each chunk using LexLM
+        extracted_texts = []
+        for chunk_text, extraction_percent in chunk_extractions:
+            # Convert percentage to target word count
+            chunk_words = len(chunk_text.split())
+            target_words = int(chunk_words * extraction_percent)
+            
+            extracted = self.extractor.extract_key_sentences(
+                chunk_text,
+                target_length=target_words,
+                tier=3
+            )
+            extracted_texts.append(extracted)
+        
+        # Combine extracted texts
+        intermediate_text = ' '.join(extracted_texts)
+        intermediate_words = len(word_tokenize(intermediate_text))
+        logger.info(f"Generated intermediate text of {intermediate_words} words")
+        
+        # Step 3: Final abstractive summarization
+        min_summary_length = 480
+        max_summary_length = 600
+        
+        # Ensure text fits within BART's context window
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained("facebook/bart-large-cnn")
+        tokens = tokenizer(intermediate_text, truncation=True, max_length=1024, return_tensors="pt")
+        truncated_text = tokenizer.decode(tokens["input_ids"][0], skip_special_tokens=True)
+        
+        logger.info(f"Generating final summary (target length: {min_summary_length}-{max_summary_length} words)")
+        summary = self.generator.tier3_model(
+            truncated_text,
+            min_length=min_summary_length,
+            max_length=max_summary_length,
+            do_sample=False
+        )[0]['summary_text']
+        
+        # Update document with summary statistics
+        summary_words = len(word_tokenize(summary))
+        document.summary = summary
+        document.summary_word_count = summary_words
+        document.compression_ratio = summary_words / document.total_words
+        
+        return summary
 
     def _process_tier_4(self, text: str) -> str:
         """Process Tier 4 document (20,000+ words) - Advanced hierarchical."""
@@ -240,13 +315,7 @@ class SummarizationPipeline:
                     summary = self._process_tier_2(doc, cursor)
                     
                 elif tier == 3:  # Hierarchical summarization for Tier 3
-                    cursor.execute("SELECT content FROM document_sections WHERE document_id = ?", (doc.id,))
-                    sections = cursor.fetchall()
-                    if not sections:
-                        logger.warning(f"No sections found for document {doc.celex_number}")
-                        continue
-                    text = "\n\n".join(section[0] for section in sections)
-                    summary = self._process_tier_3(text)
+                    summary = self._process_tier_3(doc, cursor)
                     
                 elif tier == 4:  # Advanced hierarchical for Tier 4
                     cursor.execute("SELECT content FROM document_sections WHERE document_id = ?", (doc.id,))

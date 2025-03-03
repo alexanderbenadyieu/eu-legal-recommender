@@ -112,61 +112,89 @@ class LexLMExtractor:
         percentage = self._get_extraction_percentage(chunk_number)
         return int(word_count * percentage)
     
-    def extract_key_sentences(self, text: str, chunk_number: int = 1) -> str:
-        """Extract most relevant sentences from text using LexLM model.
+    def extract_key_sentences(self, text: str, chunk_number: int = 1, tier: int = None, 
+                           target_length: int = None) -> str:
+        """Extract key sentences from text using LexLM scoring.
         
         Args:
-            text: Input text to extract from
-            chunk_number: Which chunk we're extracting (1-based)
+            text: Text to extract from
+            chunk_number: Which chunk this is (affects extraction percentage)
+            tier: Document tier (affects target length)
+            target_length: Specific target length in words (overrides percentage-based)
             
         Returns:
-            str: Extracted text containing most relevant sentences
+            Extracted text with length close to target
         """
         # Split text into sentences
         sentences = sent_tokenize(text)
+        if not sentences:
+            return text
+            
         word_count = len(text.split())
         
         # Score sentences
         scores = self.score_sentences(sentences)
         
-        # Sort sentences by score
-        sentence_scores = list(zip(sentences, scores))
-        sentence_scores.sort(key=lambda x: x[1], reverse=True)
+        # Create list of (index, sentence, score, words) tuples
+        sentence_data = [
+            (i, sent, score, len(sent.split()))
+            for i, (sent, score) in enumerate(zip(sentences, scores))
+        ]
         
-        # Get target word count (this is just a guideline)
-        target_words = self._get_tier_extraction_target(word_count, chunk_number)
+        # Sort by score (highest first)
+        sentence_data.sort(key=lambda x: x[2], reverse=True)
         
-        # Calculate flexible bounds
-        # Allow more variation for smaller chunks (earlier chunks)
-        variation = 0.25 if chunk_number <= 2 else 0.2
-        min_words = int(target_words * (1 - variation))
-        max_words = int(target_words * (1 + variation))
+        # Determine target word count
+        if target_length is not None:
+            target_words = target_length
+        elif tier:
+            target_words = self._get_tier_extraction_target(word_count, tier)
+        else:
+            percentage = self._get_extraction_percentage(chunk_number)
+            target_words = int(word_count * percentage)
         
-        # Select sentences until we reach a good stopping point
-        selected_sentences = []
+        # Calculate bounds
+        min_words = int(target_words * 0.9)  # Allow 10% under
+        max_words = int(target_words * 1.1)  # Allow 10% over
+        
+        # First pass: Add highest scoring sentences until close to target
+        selected_indices = set()
         current_words = 0
         
-        for sentence, score in sentence_scores:
-            sentence_words = len(sentence.split())
-            
-            # Always add the first sentence regardless of length
-            if not selected_sentences:
-                selected_sentences.append(sentence)
-                current_words += sentence_words
+        for idx, sent, score, sent_words in sentence_data:
+            if current_words + sent_words > max_words:
                 continue
+            selected_indices.add(idx)
+            current_words += sent_words
             
-            # If we're in the target range, only add high-scoring sentences
+            # Stop if we're close enough to target
             if current_words >= min_words:
-                # If the score is low or we're over max, stop here
-                if score < scores[0] * 0.5 or current_words >= max_words:
-                    break
+                break
+        
+        # Second pass: Optimize selection
+        if abs(current_words - target_words) > 0.1 * target_words:
+            # If under target, try to add more sentences
+            if current_words < target_words:
+                for idx, sent, score, sent_words in sentence_data:
+                    if idx not in selected_indices:
+                        if current_words + sent_words <= max_words:
+                            selected_indices.add(idx)
+                            current_words += sent_words
+                            if current_words >= min_words:
+                                break
             
-            # Add the sentence if it doesn't make us go too far over
-            if current_words + sentence_words <= max_words * 1.1:
-                selected_sentences.append(sentence)
-                current_words += sentence_words
+            # If over target, try to remove lowest scoring sentences
+            else:
+                # Sort by score (lowest first)
+                sentence_data.sort(key=lambda x: x[2])
+                for idx, sent, score, sent_words in sentence_data:
+                    if idx in selected_indices:
+                        if current_words - sent_words >= min_words:
+                            selected_indices.remove(idx)
+                            current_words -= sent_words
+                            if current_words <= max_words:
+                                break
         
-        # Sort selected sentences by their original order
-        selected_sentences.sort(key=lambda x: sentences.index(x))
-        
-        return ' '.join(selected_sentences)
+        # Return sentences in original order
+        selected = sorted((idx, sent) for idx, sent, _, _ in sentence_data if idx in selected_indices)
+        return ' '.join(sent for _, sent in selected)
