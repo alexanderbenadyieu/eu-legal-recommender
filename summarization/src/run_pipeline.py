@@ -17,6 +17,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
+    import argparse
+    
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run the summarization pipeline')
+    parser.add_argument('--tier', type=int, choices=[1, 2, 3], default=2,
+                        help='Tier to process (1: <600 words, 2: 600-2500 words, 3: 2500-20000 words)')
+    args = parser.parse_args()
+    
     logger.info("Starting summarization pipeline")
     
     # Load config
@@ -30,9 +38,9 @@ def main():
     logger.info(f"Initializing pipeline with database: {db_path}")
     pipeline = SummarizationPipeline(str(db_path), config)
     
-    # Process Tier 2 documents (600-2500 words)
-    logger.info("Starting Tier 2 document processing")
-    processed_docs = pipeline.process_documents(tier=2)
+    # Process documents for specified tier
+    logger.info(f"Starting Tier {args.tier} document processing")
+    processed_docs = pipeline.process_documents(tier=args.tier)
     
     # Calculate statistics using stored values
     total_docs = len(processed_docs)

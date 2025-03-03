@@ -22,6 +22,9 @@ class MockTensor:
     
     def __len__(self):
         return len(self.data)
+        
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 class MockTokenizerOutput:
     def __init__(self, input_ids):
@@ -46,9 +49,10 @@ class MockTokenizer:
         # Simple mock that returns a space for each token
         return ' ' * len(token_ids)
         
-    def __call__(self, text, *args, **kwargs):
-        input_ids = self.encode(text)
-        return MockTokenizerOutput([input_ids])
+    def __call__(self, text, return_tensors=None, max_length=None, truncation=None, padding=None):
+        input_ids = [self.encode(text)]
+        attention_mask = [[1] * len(ids) for ids in input_ids]
+        return MockTokenizerOutput(input_ids)
 
 class MockPipeline:
     def __init__(self, *args, **kwargs):
