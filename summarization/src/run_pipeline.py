@@ -21,8 +21,8 @@ def main():
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Run the summarization pipeline')
-    parser.add_argument('--tier', type=int, choices=[1, 2, 3], default=2,
-                        help='Tier to process (1: <600 words, 2: 600-2500 words, 3: 2500-20000 words)')
+    parser.add_argument('--tier', type=int, choices=[1, 2, 3, 4], default=2,
+                        help='Tier to process (1: <600 words, 2: 600-2500 words, 3: 2500-20000 words, 4: >20000 words)')
     args = parser.parse_args()
     
     logger.info("Starting summarization pipeline")
@@ -49,7 +49,7 @@ def main():
     compression_ratios = [doc['compression_ratio'] for doc in processed_docs if doc['compression_ratio']]
     
     # Log processing statistics
-    logger.info(f"\nTier 2 Processing Statistics:")
+    logger.info(f"\nTier {args.tier} Processing Statistics:")
     logger.info(f"Total documents processed: {total_docs}")
     if total_docs > 0:
         logger.info(f"Average document length: {total_words/total_docs:.0f} words")
@@ -58,7 +58,13 @@ def main():
         logger.info(f"Average compression ratio: {avg_compression:.2f}")
     
     # Document length distribution
-    length_ranges = [(600, 1000), (1001, 1500), (1501, 2000), (2001, 2500)]
+    length_ranges = [
+        (600, 1000), (1001, 1500), (1501, 2000), (2001, 2500)  # Tier 2
+    ] if args.tier == 2 else [
+        (20000, 30000), (30001, 40000), (40001, 50000), (50001, float('inf'))  # Tier 4
+    ] if args.tier == 4 else [
+        (2500, 5000), (5001, 10000), (10001, 15000), (15001, 20000)  # Tier 3
+    ]
     length_dist = {f"{start}-{end}": 0 for start, end in length_ranges}
     
     for doc in processed_docs:
