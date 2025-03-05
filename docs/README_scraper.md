@@ -154,7 +154,7 @@ pip install -r requirements.txt
 ## Project Structure
 
 ```
-eurlex-scraper/
+scraper/
 ├── src/                # Source code
 │   ├── __init__.py
 │   ├── main.py        # Main entry point
@@ -205,7 +205,8 @@ Documents are stored as JSON files with the following structure:
     "directory_codes": ["Hierarchical classification codes"],
     "directory_descriptions": ["Descriptions of classification codes"]
   },
-  "content": "Full text of the document as a string"
+  "content": "Full text of the document as a string",
+  "htmlcontent": "Full text of the document as a string"
 }
 ```
 

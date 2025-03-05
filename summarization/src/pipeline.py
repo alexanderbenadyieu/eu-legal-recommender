@@ -3,6 +3,13 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+import nltk
+
+# Ensure nltk punkt is downloaded
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
 
 from .utils.database_utils import load_documents, Document
 from .preprocessing.html_parser import LegalDocumentParser
@@ -212,21 +219,152 @@ class SummarizationPipeline:
         return summary
 
     def _process_tier_4(self, text: str) -> str:
-        """Process Tier 4 document (20,000+ words) - Advanced hierarchical."""
-        # Similar to Tier 3 but with different target lengths
-        chunks = chunk_text(text, max_chunk_size=self.config['max_chunk_size'])
+        """Process Tier 4 document (20,000+ words) - Advanced hierarchical.
         
-        # First level of extraction
-        extracted_chunks = []
-        for chunk in chunks:
-            extracted = self.extractor.extract_key_sentences(chunk, tier=4)
-            extracted_chunks.append(extracted)
+        Step 1: Section-Based Pre-Summarization
+        - Sections <750 words: Summarize to ≤350 words using BART
+        - Sections 750-1500 words: Extract to 600 words, then summarize to ≤350
+        - Sections >1500 words: Split into subsections, extract each to 600, summarize to ≤350
         
-        # Second level of extraction
-        combined = '\n'.join(extracted_chunks)
-        final_extraction = self.extractor.extract_key_sentences(combined, tier=4)
+        Step 2: Global Dependent-Ratio Extraction
+        - Compute compression factor f = target/total (minimum 0.15)
+        - Apply weighted extraction across chunks with decreasing weights
+        - Target final extraction of ~750 words
         
-        # Final abstractive summary
+        Step 3: Final Abstractive Summarization
+        - Generate 480-600 word summary from the ~750 word extraction
+        """
+        from nltk.tokenize import word_tokenize
+        import re
+        
+        def count_words(text: str) -> int:
+            return len(word_tokenize(text))
+            
+        def split_into_sections(text: str) -> List[str]:
+            """Split text into sections based on headers."""
+            section_patterns = [
+                r'(?:\n|^)\s*(?:SECTION|Article|ARTICLE|Chapter|CHAPTER)\s+\d+[:\.]',
+                r'(?:\n|^)\s*\d+\.\s+[A-Z]',  # Numbered sections
+                r'(?:\n|^)\s*[A-Z][A-Z\s]+(?:\n|$)'  # ALL CAPS headers
+            ]
+            
+            sections = [text]  # Start with full text
+            for pattern in section_patterns:
+                new_sections = []
+                for section in sections:
+                    splits = [s.strip() for s in re.split(pattern, section) if s.strip()]
+                    if len(splits) > 1:
+                        new_sections.extend(splits)
+                    else:
+                        new_sections.append(section)
+                sections = new_sections
+            return sections
+            
+        def process_section(section: str) -> str:
+            """Process a single section based on its length."""
+            words = count_words(section)
+            
+            if words <= 750:
+                # Direct BART summarization
+                return self.generator.summarize_tier4_section(section, max_length=350)
+            elif words <= 1500:
+                # Extract to 600, then summarize to 350
+                extracted = self.extractor.extract_key_sentences(
+                    section,
+                    target_length=600,
+                    tier=4
+                )
+                return self.generator.summarize_tier4_section(extracted, max_length=350)
+            else:
+                # Split into subsections of max 1500 words
+                subsections = []
+                current_subsection = []
+                current_words = 0
+                
+                for sentence in nltk.sent_tokenize(section):
+                    sent_words = count_words(sentence)
+                    if current_words + sent_words > 1500:
+                        # Process current subsection
+                        subsection_text = ' '.join(current_subsection)
+                        extracted = self.extractor.extract_key_sentences(
+                            subsection_text,
+                            target_length=600,
+                            tier=4
+                        )
+                        summary = self.generator.summarize_tier4_section(extracted, max_length=350)
+                        subsections.append(summary)
+                        
+                        # Start new subsection
+                        current_subsection = [sentence]
+                        current_words = sent_words
+                    else:
+                        current_subsection.append(sentence)
+                        current_words += sent_words
+                
+                # Process final subsection if any
+                if current_subsection:
+                    subsection_text = ' '.join(current_subsection)
+                    extracted = self.extractor.extract_key_sentences(
+                        subsection_text,
+                        target_length=600,
+                        tier=4
+                    )
+                    summary = self.generator.summarize_tier4_section(extracted, max_length=350)
+                    subsections.append(summary)
+                
+                return '\n'.join(subsections)
+        
+        # Step 1: Section-Based Pre-Summarization
+        sections = split_into_sections(text)
+        logger.info(f"Split document into {len(sections)} sections")
+        
+        chunks = []
+        for i, section in enumerate(sections, 1):
+            logger.info(f"Processing section {i}/{len(sections)}")
+            chunk = process_section(section)
+            chunks.append(chunk)
+        
+        # Step 2: Global Dependent-Ratio Extraction
+        combined = '\n'.join(chunks)
+        combined_words = count_words(combined)
+        target_length = 750
+        
+        # Compute compression factor
+        f = max(0.15, target_length / combined_words)
+        
+        # Define chunk weights
+        def get_weight(index: int) -> float:
+            if index == 0: return 1.2
+            elif index == 1: return 1.0
+            elif index == 2: return 0.8
+            elif index == 3: return 0.6
+            elif index == 4: return 0.5
+            else: return 0.5
+        
+        # Extract from each chunk with weights
+        weighted_chunks = []
+        total_target_words = 0
+        
+        for i, chunk in enumerate(chunks):
+            chunk_words = count_words(chunk)
+            weight = get_weight(i)
+            extraction_rate = max(0.15, min(0.35, f * weight))  # Clamp between 15-35%
+            target_words = int(chunk_words * extraction_rate)
+            total_target_words += target_words
+            
+            extracted = self.extractor.extract_key_sentences(
+                chunk,
+                target_length=target_words,
+                tier=4
+            )
+            weighted_chunks.append(extracted)
+        
+        # Combine weighted extractions
+        final_extraction = ' '.join(weighted_chunks)
+        final_words = count_words(final_extraction)
+        logger.info(f"Final extraction: {final_words} words")
+        
+        # Step 3: Final Abstractive Summarization (480-600 words)
         return self.generator.summarize(final_extraction)
 
     def process_documents(self, limit: Optional[int] = None, tier: Optional[int] = None) -> List[Dict[str, Any]]:
