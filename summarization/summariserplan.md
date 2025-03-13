@@ -14,9 +14,9 @@ This document outlines a multi-tier summarization approach designed to handle le
   **Hierarchical Summarization with Section-Based Extraction.**  
   Each section is processed as follows: sections under 350 words are used as is; sections from 350–750 words are divided into ≤350‑word chunks and reduced to about 350 words; sections between 750–1500 words are processed as a whole to ~350 words; and sections over 1500 words are subdivided into multiple chunks (each ultimately reduced to ≤350 words). These section summaries are aggregated into a global text (Lₑ), which is then refined via a weighted, dependent extraction (using a computed compression factor) to around 600–750 words. Finally, baseline BART is used to generate a final summary of 480–600 words.
 
-- **Tier 4 (20,000–68,000 Words):**  
+- **Tier 4 (20,000–117,000 Words):**  
   **Section-Level Pre-Summarization with Global Dependent Extraction.**  
-  For each section, if it is under 750 words, a baseline BART summary is produced (max 350 words); if it is between 750–1500 words, it is first reduced extractively to ~600 words and then summarized by BART to ≤350 words; if it exceeds 1500 words, it is divided into subsections (each ≤1500 words) and processed similarly. All section (or subsection) summaries are aggregated into a global text, which is then further compressed via a dependent extraction step (using mathematically computed compression factors that prioritize earlier chunks) to a target length of about 750 words. This refined global extract is then summarized by BART to produce the final summary of 480–600 words.
+  Step 1 - Section-Based Pre-Summarization: For each section, different approaches are used based on length: (a) sections under 750 words get direct BART summarization to ≤350 words; (b) sections between 750–1500 words are first reduced extractively to ~600 words then summarized by BART to ≤350 words; (c) sections over 1500 words are split into subsections (max 1500 words), each subsection is extracted to ~600 words and then summarized by BART to ≤350 words. Step 2 - Global Dependent Extraction: All section summaries are combined and compressed using weighted extraction (weights decrease from 1.2 for first chunk to 0.5 for later chunks) with a compression factor f = target(750)/total_words (minimum 0.15), clamped to 15-35% extraction per chunk. Step 3 - Final Abstractive Summarization: The ~750-word extraction is summarized by BART to produce the final summary of 480–600 words.
 
 ---
 
@@ -113,12 +113,7 @@ We first analyze the document by its sections and process each section as follow
    - **Action:**  
      Divide the section into chunks if needed (each ≤350 words) and then apply the extraction process so that the section is reduced to about 350 words.
      
-3. **Section >750 Words but ≤1500 Words:**  
-   - **Action:**  
-     Process the section as a whole. Apply the extraction process over its entirety so that it is reduced to approximately 350 words.  
-     
-4. **Section >1500 Words (95th percentile of section lengths):**  
-   - **Action:**  
+3. **Section >750 Words:**
      Subdivide the section into multiple subsections using the same logic:
      - First, split the section into chunks where each chunk is between 350 and 750 words.
      - Then, for each chunk, if its length is between 350 and 750 words, further divide it into smaller chunks (each ≤350 words) and extract until the entire subsection is reduced to about 350 words.
