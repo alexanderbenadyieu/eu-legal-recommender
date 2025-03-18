@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 import json
 from datetime import datetime
-from pinecone import Pinecone, Index, ServerlessSpec
+import pinecone
 
 from .embeddings import BERTEmbedder
 from .features import FeatureProcessor
@@ -23,10 +23,10 @@ class PineconeRecommender:
         self,
         api_key: str,
         index_name: str = "eu-legal-documents-legal-bert",
-        embedder_model: str = "nlpaueb/legal-bert-small-uncased",
+        embedder_model: str = "nlpaueb/legal-bert-base-uncased",
         feature_processor: Optional[FeatureProcessor] = None,
-        text_weight: float = 0.8,
-        categorical_weight: float = 0.2,
+        text_weight: float = 0.7,
+        categorical_weight: float = 0.3,
     ):
         """
         Initialize Pinecone recommender.
@@ -60,7 +60,8 @@ class PineconeRecommender:
     def _init_pinecone(self) -> None:
         """Initialize connection to Pinecone."""
         logger.info(f"Connecting to Pinecone index: {self.index_name}")
-        self.pc = Pinecone(api_key=self.api_key)
+        # Initialize Pinecone with API key
+        self.pc = pinecone.Pinecone(api_key=self.api_key)
         
         # Check if index exists
         if self.index_name not in self.pc.list_indexes().names():
@@ -173,26 +174,50 @@ class PineconeRecommender:
                         doc_features_dict = json.loads(feature_str)
                         
                         # Log the categorical features for debugging
-                        logger.info(f"Document {match.id} categorical features: {doc_features_dict}")
+                        logger.debug(f"Document {match.id} categorical features: {doc_features_dict}")
                         
-                        # For now, we'll use a simple matching approach
-                        # Count how many query features match document features
-                        matches = 0
-                        total = 0
+                        # Use weighted feature matching for better similarity calculation
+                        weighted_matches = 0.0
+                        weighted_total = 0.0
                         
+                        # Process each feature type with its appropriate weight
                         for feature_name, query_values in self._query_categorical_features.items():
-                            if feature_name in doc_features_dict:
+                            if feature_name in doc_features_dict and feature_name in self.feature_processor.feature_weights:
                                 doc_values = doc_features_dict[feature_name]
-                                # Check for any overlap between query and document values
-                                for value in query_values:
-                                    total += 1
-                                    if value in doc_values:
-                                        matches += 1
+                                feature_weight = self.feature_processor.feature_weights[feature_name]
+                                
+                                # Handle different feature types appropriately
+                                if feature_name in self.feature_processor.multi_valued_features:
+                                    # For multi-valued features, calculate Jaccard similarity
+                                    query_set = set(query_values)
+                                    doc_set = set(doc_values)
+                                    
+                                    if len(query_set) > 0:
+                                        # Calculate Jaccard similarity: intersection / union
+                                        intersection = len(query_set.intersection(doc_set))
+                                        union = len(query_set.union(doc_set))
+                                        similarity = intersection / union if union > 0 else 0
+                                        
+                                        weighted_matches += similarity * feature_weight
+                                        weighted_total += feature_weight
+                                        
+                                        logger.debug(f"Feature '{feature_name}' similarity: {similarity} (weight: {feature_weight})")
+                                else:
+                                    # For single-valued features, exact match
+                                    query_value = query_values[0] if isinstance(query_values, list) else query_values
+                                    doc_value = doc_values[0] if isinstance(doc_values, list) else doc_values
+                                    
+                                    if query_value == doc_value:
+                                        weighted_matches += feature_weight
+                                    
+                                    weighted_total += feature_weight
+                                    
+                                    logger.debug(f"Feature '{feature_name}' match: {query_value == doc_value} (weight: {feature_weight})")
                         
-                        # Calculate categorical similarity as proportion of matches
-                        if total > 0:
-                            cat_sim = matches / total
-                            logger.info(f"Categorical similarity for {match.id}: {cat_sim} ({matches}/{total} matches)")
+                        # Calculate weighted categorical similarity
+                        if weighted_total > 0:
+                            cat_sim = weighted_matches / weighted_total
+                            logger.info(f"Categorical similarity for {match.id}: {cat_sim:.4f} (weighted: {weighted_matches:.2f}/{weighted_total:.2f})")
                 except Exception as e:
                     logger.warning(f"Error processing categorical features for document {match.id}: {e}")
             
@@ -203,32 +228,37 @@ class PineconeRecommender:
             if cat_sim is not None:
                 # Combine scores with weights
                 score = self.text_weight * match.score + self.categorical_weight * cat_sim
-                logger.info(f"Combined score for {match.id}: {score} (text: {match.score}, cat: {cat_sim})")
+                logger.info(f"Combined score for {match.id}: {score:.4f} (text: {match.score:.4f}, cat: {cat_sim:.4f})")
                 
                 # Apply client preferences for specific features if available
-                if self.client_preferences and match.metadata:
+                if self.client_preferences and match.metadata and 'categorical_features' in match.metadata:
                     preference_bonus = 0.0
+                    feature_str = match.metadata['categorical_features']
                     
-                    # Apply form preference if available
-                    if 'form' in self.client_preferences and 'form' in match.metadata:
-                        form_value = match.metadata['form']
-                        form_weight = self.client_preferences.get('form', 0.0)
-                        if form_weight > 0:
-                            preference_bonus += form_weight
-                            logger.info(f"Applied form preference bonus for '{form_value}': {form_weight}")
-                    
-                    # Apply author preference if available
-                    if 'author' in self.client_preferences and 'author' in match.metadata:
-                        author_value = match.metadata['author']
-                        author_weight = self.client_preferences.get('author', 0.0)
-                        if author_weight > 0:
-                            preference_bonus += author_weight
-                            logger.info(f"Applied author preference bonus for '{author_value}': {author_weight}")
-                    
-                    # Add preference bonus to score
-                    if preference_bonus > 0:
-                        score += preference_bonus
-                        logger.info(f"Applied total preference bonus: {preference_bonus}")
+                    if isinstance(feature_str, str):
+                        try:
+                            doc_features = json.loads(feature_str)
+                            
+                            # Apply preferences for all client-weighted features
+                            for feature_name, preference_weight in self.client_preferences.items():
+                                if feature_name in doc_features:
+                                    doc_values = doc_features[feature_name]
+                                    
+                                    # For multi-valued features, check if any preferred values are present
+                                    if isinstance(doc_values, list) and len(doc_values) > 0:
+                                        preference_bonus += preference_weight
+                                        logger.info(f"Applied {feature_name} preference bonus: {preference_weight}")
+                                    # For single-valued features, check exact match
+                                    elif doc_values and preference_weight > 0:
+                                        preference_bonus += preference_weight
+                                        logger.info(f"Applied {feature_name} preference bonus for '{doc_values}': {preference_weight}")
+                            
+                            # Add preference bonus to score
+                            if preference_bonus > 0:
+                                score += preference_bonus
+                                logger.info(f"Applied total preference bonus: {preference_bonus:.4f}")
+                        except Exception as e:
+                            logger.warning(f"Error applying client preferences: {e}")
             
             recommendations.append({
                 'id': match.id,
@@ -249,7 +279,9 @@ class PineconeRecommender:
         self,
         document_id: str,
         top_k: int = 10,
-        filter: Optional[Dict[str, Any]] = None
+        filter: Optional[Dict[str, Any]] = None,
+        include_categorical: bool = True,
+        client_preferences: Optional[Dict[str, float]] = None
     ) -> List[Dict]:
         """
         Get similar documents based on an existing document ID.
@@ -273,10 +305,29 @@ class PineconeRecommender:
         # Get the vector
         vector = fetch_response.vectors[document_id].values
         
+        # Get the document metadata to extract categorical features
+        doc_metadata = fetch_response.vectors[document_id].metadata
+        
+        # Store client preferences if provided
+        self.client_preferences = client_preferences
+        
+        # Extract categorical features from the document if available
+        if include_categorical and doc_metadata and 'categorical_features' in doc_metadata:
+            try:
+                feature_str = doc_metadata['categorical_features']
+                if isinstance(feature_str, str):
+                    self._query_categorical_features = json.loads(feature_str)
+                    logger.info(f"Using categorical features from document: {list(self._query_categorical_features.keys())}")
+            except Exception as e:
+                logger.warning(f"Error extracting categorical features from document: {e}")
+                self._query_categorical_features = None
+        else:
+            self._query_categorical_features = None
+            
         # Query Pinecone with the vector
         results = self.index.query(
             vector=vector,
-            top_k=top_k + 1,  # Add 1 to account for the query document itself
+            top_k=top_k * 2 if self._query_categorical_features is not None else top_k + 1,  # Get more results for reranking
             include_metadata=True,
             filter=filter
         )
@@ -285,9 +336,97 @@ class PineconeRecommender:
         recommendations = []
         for match in results.matches:
             if match.id != document_id:  # Exclude the query document
+                # Extract the document's categorical features from metadata if available
+                doc_categorical_features = None
+                cat_sim = None
+                
+                if self._query_categorical_features is not None and match.metadata and 'categorical_features' in match.metadata:
+                    try:
+                        # Parse the JSON string of categorical features
+                        feature_str = match.metadata['categorical_features']
+                        if isinstance(feature_str, str):
+                            doc_features_dict = json.loads(feature_str)
+                            
+                            # Use weighted feature matching for better similarity calculation
+                            weighted_matches = 0.0
+                            weighted_total = 0.0
+                            
+                            # Process each feature type with its appropriate weight
+                            for feature_name, query_values in self._query_categorical_features.items():
+                                if feature_name in doc_features_dict and feature_name in self.feature_processor.feature_weights:
+                                    doc_values = doc_features_dict[feature_name]
+                                    feature_weight = self.feature_processor.feature_weights[feature_name]
+                                    
+                                    # Handle different feature types appropriately
+                                    if feature_name in self.feature_processor.multi_valued_features:
+                                        # For multi-valued features, calculate Jaccard similarity
+                                        query_set = set(query_values)
+                                        doc_set = set(doc_values)
+                                        
+                                        if len(query_set) > 0:
+                                            # Calculate Jaccard similarity: intersection / union
+                                            intersection = len(query_set.intersection(doc_set))
+                                            union = len(query_set.union(doc_set))
+                                            similarity = intersection / union if union > 0 else 0
+                                            
+                                            weighted_matches += similarity * feature_weight
+                                            weighted_total += feature_weight
+                                    else:
+                                        # For single-valued features, exact match
+                                        query_value = query_values[0] if isinstance(query_values, list) else query_values
+                                        doc_value = doc_values[0] if isinstance(doc_values, list) else doc_values
+                                        
+                                        if query_value == doc_value:
+                                            weighted_matches += feature_weight
+                                        
+                                        weighted_total += feature_weight
+                            
+                            # Calculate weighted categorical similarity
+                            if weighted_total > 0:
+                                cat_sim = weighted_matches / weighted_total
+                    except Exception as e:
+                        logger.warning(f"Error processing categorical features for document {match.id}: {e}")
+                
+                # Calculate combined score
+                score = match.score  # Default to text similarity score
+                
+                # If we have a categorical similarity score, incorporate it
+                if cat_sim is not None:
+                    # Combine scores with weights
+                    score = self.text_weight * match.score + self.categorical_weight * cat_sim
+                    
+                    # Apply client preferences if available
+                    if self.client_preferences and match.metadata and 'categorical_features' in match.metadata:
+                        preference_bonus = 0.0
+                        feature_str = match.metadata['categorical_features']
+                        
+                        if isinstance(feature_str, str):
+                            try:
+                                doc_features = json.loads(feature_str)
+                                
+                                # Apply preferences for all client-weighted features
+                                for feature_name, preference_weight in self.client_preferences.items():
+                                    if feature_name in doc_features:
+                                        doc_values = doc_features[feature_name]
+                                        
+                                        # For multi-valued features, check if any preferred values are present
+                                        if isinstance(doc_values, list) and len(doc_values) > 0:
+                                            preference_bonus += preference_weight
+                                        # For single-valued features, check exact match
+                                        elif doc_values and preference_weight > 0:
+                                            preference_bonus += preference_weight
+                                
+                                # Add preference bonus to score
+                                if preference_bonus > 0:
+                                    score += preference_bonus
+                            except Exception as e:
+                                logger.warning(f"Error applying client preferences: {e}")
+                
                 recommendations.append({
                     'id': match.id,
-                    'score': match.score,
+                    'score': score,
+                    'text_score': match.score,
+                    'categorical_score': cat_sim,
                     'metadata': match.metadata
                 })
             

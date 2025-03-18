@@ -73,13 +73,7 @@ class PineconeEmbeddingManager:
         if self.index_name not in self.pc.list_indexes().names():
             logger.info(f"Index {self.index_name} does not exist. Creating new index with dimension {self.dimension}")
             # Create a new index with the specified dimension
-            # Let Pinecone choose the appropriate region for the free tier
-            self.pc.create_index(
-                name=self.index_name,
-                dimension=self.dimension,
-                metric=self.metric
-                # No spec parameter - let Pinecone use defaults for free tier
-            )
+            self.create_index()
             logger.info(f"Created new Pinecone index: {self.index_name}")
         else:
             logger.info(f"Found existing Pinecone index: {self.index_name}")
@@ -94,6 +88,55 @@ class PineconeEmbeddingManager:
         # Use delete_all method to remove all vectors
         self.index.delete(delete_all=True)
         logger.info("All embeddings deleted successfully")
+    
+    def create_index(self) -> None:
+        """Create a new Pinecone index with the specified dimension."""
+        logger.info(f"Creating new Pinecone index: {self.index_name} with dimension {self.dimension}")
+        try:
+            # Create index with the specified dimension
+            # For AWS free tier in us-east-1 (as per latest Pinecone documentation)
+            from pinecone import ServerlessSpec
+            
+            self.pc.create_index(
+                name=self.index_name,
+                dimension=self.dimension,
+                metric=self.metric,
+                spec=ServerlessSpec(cloud='aws', region='us-east-1')
+            )
+            logger.info(f"Created new Pinecone index: {self.index_name} with dimension {self.dimension}")
+        except Exception as e:
+            logger.error(f"Error creating Pinecone index: {e}")
+            raise
+    
+    def delete_index(self) -> None:
+        """Delete the Pinecone index."""
+        logger.info(f"Deleting Pinecone index: {self.index_name}")
+        try:
+            if self.index_name in self.pc.list_indexes().names():
+                self.pc.delete_index(self.index_name)
+                logger.info(f"Deleted Pinecone index: {self.index_name}")
+            else:
+                logger.warning(f"Index {self.index_name} does not exist, nothing to delete")
+        except Exception as e:
+            logger.error(f"Error deleting Pinecone index: {e}")
+            raise
+    
+    def delete_and_recreate_index(self) -> None:
+        """Delete the entire Pinecone index and recreate it with the current dimension."""
+        logger.info(f"Deleting and recreating Pinecone index with dimension {self.dimension}")
+        try:
+            # Delete the index if it exists
+            self.delete_index()
+            
+            # Create a new index with the specified dimension
+            self.create_index()
+            
+            # Connect to the new index
+            self.index = self.pc.Index(self.index_name)
+            logger.info(f"Connected to new Pinecone index: {self.index_name}")
+        except Exception as e:
+            logger.error(f"Error recreating Pinecone index: {e}")
+            raise
     
     def fetch_tier_documents(
         self, 

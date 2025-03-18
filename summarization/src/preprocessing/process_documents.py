@@ -7,6 +7,13 @@ from typing import List, Optional
 from datetime import datetime
 from src.preprocessing.html_parser import LegalDocumentParser, DocumentSection
 
+# Add the project root to the Python path to import database_utils
+project_root = str(Path(__file__).parents[3])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from database_utils import get_db_connection, save_document_section
+
 @dataclass
 class Document:
     """Represents a legal document with all its metadata and content."""
@@ -17,34 +24,44 @@ class Document:
     content_html: str
     sections: Optional[List[DocumentSection]] = None
 
-def init_processed_db(db_path: Path):
-    """Initialize the processed documents database."""
-    conn = sqlite3.connect(db_path)
-    with open(db_path.parent / 'data_models.sql', 'r') as f:
-        conn.executescript(f.read())
-    conn.close()
+def init_processed_db(db_path: Path = None):
+    """Initialize the processed documents database.
+    
+    Note: This function is kept for backward compatibility but is no longer needed
+    as we're using the consolidated database.
+    """
+    print("Using consolidated database - no initialization needed")
 
 def store_processed_document(conn: sqlite3.Connection, doc: Document, sections: List[DocumentSection]):
     """Store a processed document and its sections in the database."""
     cursor = conn.cursor()
     
-    # Insert the processed document
-    cursor.execute("""
-        INSERT INTO processed_documents (celex_number, html_url, processed_date)
-        VALUES (?, ?, ?)
-    """, (doc.celex, doc.html_url, datetime.now()))
+    # Get the document_id from the documents table using celex_number
+    cursor.execute("SELECT document_id FROM documents WHERE celex_number = ?", (doc.celex,))
+    result = cursor.fetchone()
     
-    doc_id = cursor.lastrowid
+    if not result:
+        print(f"Warning: Document with CELEX {doc.celex} not found in documents table")
+        return
     
-    # Insert all sections
+    doc_id = result[0]
+    
+    # Insert all sections using the utility function
     for i, section in enumerate(sections):
-        cursor.execute("""
-            INSERT INTO document_sections 
-            (document_id, title, content, section_type, section_order)
-            VALUES (?, ?, ?, ?, ?)
-        """, (doc_id, section.title, section.content, section.section_type, i))
+        # Calculate word count
+        word_count = len(section.content.split()) if section.content else 0
+        
+        # Use the save_document_section utility function
+        save_document_section(
+            document_id=doc_id,
+            title=section.title,
+            content=section.content,
+            section_type=section.section_type,
+            section_order=i,
+            word_count=word_count
+        )
     
-    conn.commit()
+    print(f"Stored document {doc.celex} with ID {doc_id} and {len(sections)} sections")
 
 def get_total_documents(conn: sqlite3.Connection) -> int:
     """Get total number of documents to process."""
@@ -59,39 +76,48 @@ def get_total_documents(conn: sqlite3.Connection) -> int:
 def get_processed_documents(conn: sqlite3.Connection) -> set:
     """Get set of already processed document IDs."""
     cursor = conn.cursor()
-    cursor.execute("SELECT celex_number FROM processed_documents")
+    cursor.execute("""
+        SELECT celex_number FROM documents d
+        WHERE EXISTS (
+            SELECT 1 FROM document_sections ds
+            WHERE ds.document_id = d.document_id
+        )
+    """)
     return {row[0] for row in cursor}
 
-def process_documents(source_db: Path, target_db: Path, batch_size: int = 10):
-    """Process documents and store them in the target database."""
+def process_documents(source_db: Path = None, target_db: Path = None, batch_size: int = 10):
+    """Process documents and store them in the target database.
+    
+    Note: source_db and target_db parameters are kept for backward compatibility,
+    but we're now using the consolidated database for both source and target.
+    """
     # Initialize parser
     parser = LegalDocumentParser(Path.cwd())
     
-    # Connect to both databases
-    source_conn = sqlite3.connect(source_db)
-    target_conn = sqlite3.connect(target_db)
+    # Connect to the consolidated database
+    conn = get_db_connection(db_type='consolidated')
     
     # Get total documents and already processed ones
-    total_docs = get_total_documents(source_conn)
-    processed_docs = get_processed_documents(target_conn)
+    total_docs = get_total_documents(conn)
+    processed_docs = get_processed_documents(conn)
     
     print(f"Found {total_docs} documents to process")
     print(f"Already processed: {len(processed_docs)} documents")
     
-    source_cursor = source_conn.cursor()
+    cursor = conn.cursor()
     processed_count = 0
     error_count = 0
     
     try:
         # Get documents in batches
-        source_cursor.execute("""
+        cursor.execute("""
             SELECT document_id, celex_number, html_url, content, content_html 
             FROM documents
             WHERE content_html IS NOT NULL
         """)
         
         while True:
-            rows = source_cursor.fetchmany(batch_size)
+            rows = cursor.fetchmany(batch_size)
             if not rows:
                 break
                 
@@ -115,7 +141,7 @@ def process_documents(source_db: Path, target_db: Path, batch_size: int = 10):
                     sections = parser.parse_html_content(doc.content_html)
                     
                     # Store in database
-                    store_processed_document(target_conn, doc, sections)
+                    store_processed_document(conn, doc, sections)
                     
                     processed_count += 1
                     print(f"Found {len(sections)} sections")
@@ -132,28 +158,15 @@ def process_documents(source_db: Path, target_db: Path, batch_size: int = 10):
         print(f"- Errors encountered: {error_count} documents")
         print(f"- Total documents in database: {len(processed_docs) + processed_count}")
         
-        source_conn.close()
-        target_conn.close()
+        conn.close()
 
 def main():
-    # Setup paths
-    base_dir = Path(__file__).parent.parent
-    source_db = base_dir / "scraper" / "data" / "eurlex.db"
-    target_db = base_dir / "summarization" / "data" / "processed_documents.db"
-    
-    # Create data directory if it doesn't exist
-    target_db.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Initialize the processed documents database if it doesn't exist
-    if not target_db.exists():
-        print("Initializing processed documents database...")
-        init_processed_db(target_db)
-    else:
-        print("Using existing processed documents database")
+    # No need to set up paths as we're using the consolidated database
+    print("Using consolidated database for document processing")
     
     # Process documents
     print("\nStarting document processing...")
-    process_documents(source_db, target_db, batch_size=10)
+    process_documents(batch_size=10)
 
 if __name__ == "__main__":
     main()

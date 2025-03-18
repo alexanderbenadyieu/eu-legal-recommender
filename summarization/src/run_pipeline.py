@@ -1,8 +1,16 @@
 """Run the summarization pipeline."""
 import yaml
 import logging
+import sys
 from pathlib import Path
+
+# Add the project root to the Python path
+project_root = str(Path(__file__).parents[2])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 from summarization.src.pipeline import SummarizationPipeline
+from database_utils import get_db_connection
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +31,8 @@ def main():
     parser = argparse.ArgumentParser(description='Run the summarization pipeline')
     parser.add_argument('--tier', type=int, choices=[1, 2, 3, 4], default=2,
                         help='Tier to process (1: <600 words, 2: 600-2500 words, 3: 2500-20000 words, 4: >20000 words)')
+    parser.add_argument('--db-type', type=str, choices=['consolidated', 'legacy'], default='consolidated',
+                        help="Database type to use ('consolidated' or 'legacy')")
     args = parser.parse_args()
     
     logger.info("Starting summarization pipeline")
@@ -33,10 +43,9 @@ def main():
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     
-    # Initialize pipeline
-    db_path = Path('/Users/alexanderbenady/DataThesis/eu-legal-recommender/summarization/data/processed_documents.db')
-    logger.info(f"Initializing pipeline with database: {db_path}")
-    pipeline = SummarizationPipeline(str(db_path), config)
+    # Initialize pipeline with the specified database type
+    logger.info(f"Initializing pipeline with {args.db_type} database")
+    pipeline = SummarizationPipeline(db_type=args.db_type, config=config)
     
     # Process documents for specified tier
     logger.info(f"Starting Tier {args.tier} document processing")
@@ -44,7 +53,15 @@ def main():
     
     # Calculate statistics using stored values
     total_docs = len(processed_docs)
-    total_words = sum(doc['total_words'] for doc in processed_docs)
+    
+    # Handle both consolidated and legacy database field names
+    if 'word_count' in processed_docs[0] if processed_docs else {}:
+        # Consolidated database
+        total_words = sum(doc['word_count'] for doc in processed_docs)
+    else:
+        # Legacy database
+        total_words = sum(doc['total_words'] for doc in processed_docs)
+        
     total_summary_words = sum(doc['summary_word_count'] for doc in processed_docs if doc['summary_word_count'])
     compression_ratios = [doc['compression_ratio'] for doc in processed_docs if doc['compression_ratio']]
     
@@ -68,8 +85,11 @@ def main():
     length_dist = {f"{start}-{end}": 0 for start, end in length_ranges}
     
     for doc in processed_docs:
+        # Get the word count from the appropriate field based on database type
+        word_count = doc.get('word_count', doc.get('total_words', 0))
+        
         for start, end in length_ranges:
-            if start <= doc['total_words'] <= end:
+            if start <= word_count <= end:
                 length_dist[f"{start}-{end}"] += 1
                 break
     

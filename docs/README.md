@@ -7,8 +7,8 @@ A sophisticated recommender system designed to match EU legal documents with use
 ### Core Components
 
 1. **Text Embedding (embeddings.py)**
-   - Uses BERT (all-MiniLM-L6-v2) for semantic text understanding
-   - Combines document summaries and keywords with weighted importance
+   - Uses Legal-BERT (nlpaueb/legal-bert-small-uncased) for domain-specific semantic text understanding
+   - 512-dimensional embeddings optimized for legal text
    - Features:
      - Efficient batch processing
      - Embedding caching
@@ -21,17 +21,18 @@ A sophisticated recommender system designed to match EU legal documents with use
      - Feature persistence and loading
      - Dynamic feature space adaptation
 
-3. **Similarity Computation (similarity.py)**
+3. **Similarity Computation**
    - Hybrid similarity calculation combining:
-     - Text embedding similarity (70% weight)
-     - Categorical feature similarity (30% weight)
-   - Uses FAISS for efficient similarity search
-   - Supports both exact and approximate nearest neighbor search
+     - Text embedding similarity (80% weight)
+     - Categorical feature similarity (20% weight)
+   - Uses Pinecone vector database for efficient similarity search
+   - Supports metadata filtering and hybrid search
 
-4. **Document Ranking (ranker.py)**
-   - Combines all components for final recommendations
+4. **Recommender System (pinecone_recommender.py)**
+   - Leverages Pinecone vector database for scalable similarity search
    - Provides configurable ranking parameters
-   - Includes document and computation caching
+   - Supports hybrid search combining embedding similarity with categorical features
+   - Includes metadata filtering capabilities
 
 ### Input Features
 
@@ -65,57 +66,46 @@ pip install -r requirements.txt
 ```python
 from recommender.src.models.embeddings import BERTEmbedder
 from recommender.src.models.features import FeatureProcessor
-from recommender.src.models.similarity import SimilarityComputer
-from recommender.src.models.ranker import DocumentRanker
+from recommender.src.models.pinecone_recommender import PineconeRecommender
 
 # Initialize components
-embedder = BERTEmbedder(model_name='all-MiniLM-L6-v2')
-feature_processor = FeatureProcessor()
-similarity_computer = SimilarityComputer(
-    text_weight=0.7,
-    categorical_weight=0.3
-)
+embedder = BERTEmbedder(model_name='nlpaueb/legal-bert-small-uncased')
+feature_processor = FeatureProcessor({
+    'type': ['regulation', 'directive', 'decision', 'other'],
+    'subject': ['environment', 'transport', 'energy', 'finance', 'other'],
+    'scope': ['EU-wide', 'member_states', 'third_countries', 'other'],
+    'legal_basis': ['TFEU_114', 'TFEU_192', 'TFEU_194', 'other']
+})
 
-# Create ranker
-ranker = DocumentRanker(
-    embedder=embedder,
+# Create Pinecone recommender
+recommender = PineconeRecommender(
+    api_key='your_pinecone_api_key',
+    index_name='eu-legal-documents-legal-bert',
+    embedder_model='nlpaueb/legal-bert-small-uncased',
     feature_processor=feature_processor,
-    similarity_computer=similarity_computer
+    text_weight=0.8,
+    categorical_weight=0.2
 )
-
-# Process documents
-documents = [
-    {
-        'id': 'doc1',
-        'summary': 'Document summary text...',
-        'keywords': ['keyword1', 'keyword2'],
-        'features': {
-            'type': 'regulation',
-            'subject': 'environment',
-            'scope': 'EU-wide'
-        }
-    },
-    # ... more documents
-]
-
-ranker.process_documents(documents)
 
 # Get recommendations
-query_profile = {
-    'interests': 'Environmental protection and climate change',
-    'keywords': ['environment', 'climate', 'protection'],
-    'features': {
+recommendations = recommender.get_recommendations(
+    query_text='Environmental regulations for reducing greenhouse gas emissions',
+    query_keywords=['climate', 'emissions', 'environment'],
+    query_features={
         'type': 'regulation',
         'subject': 'environment',
-        'scope': 'EU-wide'
-    }
-}
-
-recommendations = ranker.rank_documents(
-    query_profile,
-    top_k=10,
-    min_similarity=0.5
+        'scope': 'EU-wide',
+        'legal_basis': 'TFEU_192'
+    },
+    top_k=5
 )
+
+# Display results
+for i, rec in enumerate(recommendations):
+    print(f"{i+1}. Document ID: {rec['id']} (Score: {rec['score']:.4f})")
+    print(f"   Text Similarity: {rec['text_score']:.4f}")
+    if rec.get('categorical_score'):
+        print(f"   Categorical Similarity: {rec['categorical_score']:.4f}")
 ```
 
 ### Advanced Configuration
@@ -123,24 +113,28 @@ recommendations = ranker.rank_documents(
 ```python
 # Enable GPU acceleration
 embedder = BERTEmbedder(
-    model_name='all-MiniLM-L6-v2',
+    model_name='nlpaueb/legal-bert-small-uncased',
     device='cuda'
 )
 
-# Configure similarity search
-similarity_computer = SimilarityComputer(
-    text_weight=0.7,
-    categorical_weight=0.3,
-    use_faiss=True  # Enable FAISS for faster search
+# Configure Pinecone with metadata filtering
+recommender = PineconeRecommender(
+    api_key='your_pinecone_api_key',
+    index_name='eu-legal-documents-legal-bert',
+    environment='gcp-starter',  # Or your specific Pinecone environment
+    embedder_model='nlpaueb/legal-bert-small-uncased',
+    feature_processor=feature_processor,
+    text_weight=0.8,
+    categorical_weight=0.2
 )
 
-# Enable caching
-ranker = DocumentRanker(
-    embedder=embedder,
-    feature_processor=feature_processor,
-    similarity_computer=similarity_computer,
-    cache_dir='./cache'
-)
+# Use metadata filtering for more targeted results
+filter_dict = {
+    "metadata": {
+        "type": "regulation",
+        "year": {"$gte": 2015}  # Documents from 2015 or later
+    }
+}
 ```
 
 ## Performance Optimization

@@ -10,6 +10,16 @@ import numpy as np
 from tqdm import tqdm
 import gc
 import torch
+import sys
+import os
+import time
+
+# Add the project root to the Python path to import database_utils
+project_root = str(Path(__file__).parents[2])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from database_utils import get_db_connection, save_document_keyword
 
 # Set up logging
 logging.basicConfig(
@@ -62,36 +72,70 @@ class DynamicKeywordExtractor:
         
         return keywords
 
-def process_documents(db_path: str, batch_size: int = 3, max_text_length: int = 100000, resume_from: int = 0) -> None:
-    """Process documents from SQLite database and extract keywords."""
+def process_documents(db_path: str = None, batch_size: int = 3, max_text_length: int = 100000, resume_from: int = 0, db_type: str = 'consolidated') -> None:
+    """Process documents from database and extract keywords.
+    
+    Args:
+        db_path: Path to SQLite database (used only if db_type is 'legacy')
+        batch_size: Number of documents to process in each batch
+        max_text_length: Maximum text length to process
+        resume_from: Resume from document offset
+        db_type: Database type to use ('consolidated' or 'legacy')
+    """
     # Create keyword extractor
     extractor = DynamicKeywordExtractor()
     
-    # Connect to database with timeout and immediate transaction mode
-    conn = sqlite3.connect(db_path, timeout=60.0)
+    # Connect to database using the utility function
+    if db_type == 'legacy' and db_path:
+        conn = sqlite3.connect(db_path)
+    else:
+        conn = get_db_connection(db_type=db_type, read_only=False)
+        
     conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging for better concurrency
     cursor = conn.cursor()
     
     try:
         # Create keywords table if it doesn't exist
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS document_keywords (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            document_id INTEGER NOT NULL,
-            keyword TEXT NOT NULL,
-            score REAL NOT NULL,
-            FOREIGN KEY (document_id) REFERENCES processed_documents(id)
-        )
-        """)
+        if db_type == 'consolidated':
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS document_keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                keyword TEXT NOT NULL,
+                score REAL NOT NULL,
+                FOREIGN KEY (document_id) REFERENCES documents(document_id)
+            )
+            """)
+        else:
+            # Legacy database
+            cursor.execute("""
+            CREATE TABLE IF NOT EXISTS document_keywords (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER NOT NULL,
+                keyword TEXT NOT NULL,
+                score REAL NOT NULL,
+                FOREIGN KEY (document_id) REFERENCES processed_documents(id)
+            )
+            """)
         
         # Get count of unprocessed documents
-        cursor.execute("""
-            SELECT COUNT(*)
-            FROM processed_documents pd
-            WHERE NOT EXISTS (
-                SELECT 1 FROM document_keywords dk WHERE dk.document_id = pd.id
-            )
-        """)
+        if db_type == 'consolidated':
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM documents d
+                WHERE d.summary IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM document_keywords dk WHERE dk.document_id = d.document_id
+                )
+            """)
+        else:
+            # Legacy database
+            cursor.execute("""
+                SELECT COUNT(*)
+                FROM processed_documents d
+                WHERE d.summary IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM document_keywords dk WHERE dk.document_id = d.id
+                )
+            """)
         total_docs = cursor.fetchone()[0]
         logger.info(f"Found {total_docs} documents without keywords to process")
         
@@ -111,16 +155,37 @@ def process_documents(db_path: str, batch_size: int = 3, max_text_length: int = 
             retry_count = 0
             while retry_count < max_retries:
                 try:
-                    cursor.execute("""
-                SELECT pd.id, pd.celex_number, GROUP_CONCAT(ds.content, ' ') as full_text
-                FROM processed_documents pd
-                LEFT JOIN document_sections ds ON pd.id = ds.document_id
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM document_keywords dk WHERE dk.document_id = pd.id
-                )
-                GROUP BY pd.id, pd.celex_number
-                LIMIT ? OFFSET ?
-            """, (batch_size, offset))
+                    if db_type == 'consolidated':
+                        cursor.execute("""
+                    SELECT d.document_id, d.celex_number, 
+                           CASE 
+                               WHEN d.summary IS NOT NULL THEN d.summary 
+                               ELSE GROUP_CONCAT(ds.content, ' ')
+                           END as full_text
+                    FROM documents d
+                    LEFT JOIN document_sections ds ON d.document_id = ds.document_id
+                    WHERE d.summary IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM document_keywords dk WHERE dk.document_id = d.document_id
+                    )
+                    GROUP BY d.document_id, d.celex_number
+                    LIMIT ? OFFSET ?
+                """, (batch_size, offset))
+                    else:
+                        # Legacy database
+                        cursor.execute("""
+                    SELECT d.id as document_id, d.celex_number, 
+                           CASE 
+                               WHEN d.summary IS NOT NULL THEN d.summary 
+                               ELSE GROUP_CONCAT(ds.content, ' ')
+                           END as full_text
+                    FROM processed_documents d
+                    LEFT JOIN document_sections ds ON d.id = ds.document_id
+                    WHERE d.summary IS NOT NULL AND NOT EXISTS (
+                        SELECT 1 FROM document_keywords dk WHERE dk.document_id = d.id
+                    )
+                    GROUP BY d.id, d.celex_number
+                    LIMIT ? OFFSET ?
+                """, (batch_size, offset))
                     documents = cursor.fetchall()
                     break
                 except sqlite3.OperationalError as e:
@@ -154,10 +219,16 @@ def process_documents(db_path: str, batch_size: int = 3, max_text_length: int = 
                     retry_count = 0
                     while retry_count < max_retries:
                         try:
-                            cursor.executemany(
-                                "INSERT INTO document_keywords (document_id, keyword, score) VALUES (?, ?, ?)",
-                                [(doc_id, kw, score) for kw, score in keywords]
-                            )
+                            # Use the utility function to save keywords
+                            for kw, score in keywords:
+                                if db_type == 'consolidated':
+                                    save_document_keyword(doc_id, kw, score)
+                                else:
+                                    # Legacy database
+                                    cursor.execute("""
+                                        INSERT INTO document_keywords (document_id, keyword, score)
+                                        VALUES (?, ?, ?)
+                                    """, (doc_id, kw, score))
                             break
                         except sqlite3.OperationalError as e:
                             if "database is locked" in str(e):
@@ -217,22 +288,23 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
     
     parser = argparse.ArgumentParser()
+    parser.add_argument("--db-path", type=str, help="Path to SQLite database (only used with --db-type=legacy)")
+    parser.add_argument("--db-type", type=str, choices=['consolidated', 'legacy'], default='consolidated',
+                      help="Database type to use ('consolidated' or 'legacy')")
     parser.add_argument("--resume-from", type=int, default=0, help="Resume from offset")
     parser.add_argument("--batch-size", type=int, default=3, help="Batch size for processing")
     parser.add_argument("--max-text-length", type=int, default=100000, help="Maximum text length to process")
     args = parser.parse_args()
     
-    # Path to database
-    DB_PATH = Path(__file__).parents[1] / "data" / "processed_documents.db"
-    
     # Process documents
-    logger.info(f"Starting keyword extraction from {DB_PATH}")
+    logger.info(f"Starting keyword extraction using {args.db_type} database")
     try:
         process_documents(
-            str(DB_PATH),
+            db_path=args.db_path,
             batch_size=args.batch_size,
             max_text_length=args.max_text_length,
-            resume_from=args.resume_from
+            resume_from=args.resume_from,
+            db_type=args.db_type
         )
         logger.info("Keyword extraction complete")
     except KeyboardInterrupt:
