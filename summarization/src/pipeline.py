@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -11,7 +12,13 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-from .utils.database_utils import load_documents, Document
+# Add the project root to the Python path
+project_root = str(Path(__file__).parents[2])
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from database_utils import get_db_connection, save_document_summary, get_document_sections
+from .utils.database_utils import Document
 from .preprocessing.html_parser import LegalDocumentParser
 from .utils.text_chunking import chunk_text
 from .extractive.lexlm_wrapper import LexLMExtractor
@@ -21,18 +28,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class SummarizationPipeline:
-    def __init__(self, db_path: str, config: Dict[str, Any]):
+    def __init__(self, db_type: str = 'consolidated', config: Dict[str, Any] = None):
         """
         Initialize the summarization pipeline.
         
         Args:
-            db_path: Path to the SQLite database
+            db_type: Type of database to use ('consolidated' or 'legacy')
             config: Configuration dictionary containing chunking parameters
         """
-        self.db_path = db_path
+        self.db_type = db_type
         self.full_config = config  # Store full config
-        self.config = config['chunking']  # Chunking config for backward compatibility
-        self.html_parser = LegalDocumentParser(Path(db_path).parent)
+        self.config = config['chunking'] if config and 'chunking' in config else {}
+        self.html_parser = LegalDocumentParser(Path.cwd())
         self.extractor = LexLMExtractor(config=config)
         self.generator = BartFineTuner()
         
@@ -51,7 +58,7 @@ class SummarizationPipeline:
         """Process Tier 1 document (0-600 words) - Direct abstractive summarization."""
         return self.generator.summarize(text)
 
-    def _process_tier_2(self, document: Document, cursor: sqlite3.Cursor) -> str:
+    def _process_tier_2(self, document: Document, conn: sqlite3.Connection) -> str:
         """Process Tier 2 document (600-2,500 words) - Two-step summarization.
         
         Process:
@@ -61,15 +68,14 @@ class SummarizationPipeline:
         """
         logger.info(f"Processing Tier 2 document {document.celex_number} by sections")
         
-        # Get document content from database
-        cursor.execute("SELECT content FROM document_sections WHERE document_id = ?", (document.id,))
-        sections = cursor.fetchall()
+        # Get document sections from database using utility function
+        sections = get_document_sections(document_id=document.id, db_type=self.db_type)
         if not sections:
             logger.warning(f"No sections found for document {document.celex_number}")
             return ""
             
         # Combine all sections into one text
-        text = "\n\n".join(section[0] for section in sections)
+        text = "\n\n".join(section['content'] for section in sections)
         
         # Step 1: Split into chunks that fit within context length (514 tokens)
         chunks = chunk_text(text)  # Default max_tokens=514
@@ -125,7 +131,7 @@ class SummarizationPipeline:
         
         return summary
 
-    def _process_tier_3(self, document: Document, cursor: sqlite3.Cursor) -> str:
+    def _process_tier_3(self, document: Document, conn: sqlite3.Connection) -> str:
         """Process Tier 3 document (2,500-20,000 words) - Hierarchical summarization.
         
         This implements the new section-aware hierarchical summarization process:
@@ -376,26 +382,47 @@ class SummarizationPipeline:
         """
         logger.info("Loading documents from database...")
         
-        # Construct SQL query based on tier
-        query = "SELECT * FROM processed_documents WHERE summary IS NULL"
-        params = []
+        # Connect to database using utility function
+        conn = get_db_connection(db_type=self.db_type)
+        conn.row_factory = sqlite3.Row
         
+        # Construct SQL query based on tier
         if tier == 1:
-            query += " AND total_words <= 600 AND total_words > 0"
+            tier_min, tier_max = 0, 600
         elif tier == 2:
-            query += " AND total_words > 600 AND total_words <= 2500"
+            tier_min, tier_max = 601, 2500
         elif tier == 3:
-            query += " AND total_words > 2500 AND total_words <= 20000"
+            tier_min, tier_max = 2501, 20000
         elif tier == 4:
-            query += " AND total_words > 20000"
+            tier_min, tier_max = 20001, 1000000  # Large upper bound for tier 4
+        else:
+            tier_min, tier_max = 0, 1000000  # Process all documents
+        
+        # Query for documents that need summarization
+        if self.db_type == 'consolidated':
+            query = """
+                SELECT document_id as id, celex_number, html_url, word_count as total_words, 
+                       summary, summary_word_count, compression_ratio
+                FROM documents
+                WHERE word_count BETWEEN ? AND ?
+                AND summary IS NULL
+                ORDER BY word_count
+            """
+        else:
+            # Legacy database query
+            query = """
+                SELECT * FROM processed_documents 
+                WHERE total_words BETWEEN ? AND ?
+                AND summary IS NULL
+                ORDER BY total_words
+            """
             
         if limit:
             query += " LIMIT ?"
-            params.append(limit)
+            params = [tier_min, tier_max, limit]
+        else:
+            params = [tier_min, tier_max]
             
-        # Connect to database and execute query
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
         cursor = conn.execute(query, params)
         rows = cursor.fetchall()
         
@@ -418,9 +445,7 @@ class SummarizationPipeline:
         if not documents:
             logger.warning("No documents found to process!")
         
-        # Connect to database
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+        # We already have the database connection
         
         # Tables already exist, skipping creation
         
@@ -439,29 +464,27 @@ class SummarizationPipeline:
                     
                     # Get document content from database
                     logger.info(f"Fetching content for document {doc.celex_number}")
-                    cursor.execute("SELECT content FROM document_sections WHERE document_id = ?", (doc.id,))
-                    sections = cursor.fetchall()
+                    sections = get_document_sections(document_id=doc.id, db_type=self.db_type)
                     if not sections:
                         logger.warning(f"No sections found for document {doc.celex_number}")
                         continue
                         
                     # Combine all sections into one text
-                    text = "\n\n".join(section[0] for section in sections)
+                    text = "\n\n".join(section['content'] for section in sections)
                     summary = self._process_tier_1(text)
                     
                 elif tier == 2:  # Two-step summarization for Tier 2
-                    summary = self._process_tier_2(doc, cursor)
+                    summary = self._process_tier_2(doc, conn)
                     
                 elif tier == 3:  # Hierarchical summarization for Tier 3
-                    summary = self._process_tier_3(doc, cursor)
+                    summary = self._process_tier_3(doc, conn)
                     
                 elif tier == 4:  # Advanced hierarchical for Tier 4
-                    cursor.execute("SELECT content FROM document_sections WHERE document_id = ?", (doc.id,))
-                    sections = cursor.fetchall()
+                    sections = get_document_sections(document_id=doc.id, db_type=self.db_type)
                     if not sections:
                         logger.warning(f"No sections found for document {doc.celex_number}")
                         continue
-                    text = "\n\n".join(section[0] for section in sections)
+                    text = "\n\n".join(section['content'] for section in sections)
                     summary = self._process_tier_4(text)
                     
                 else:
@@ -479,15 +502,16 @@ class SummarizationPipeline:
                 
                 logger.info(f"Generated summary for {doc.celex_number} with {doc.summary_word_count} words (compression ratio: {doc.compression_ratio:.2f})")
                 
-                # Store document summary in database
-                cursor.execute("""
-                    UPDATE processed_documents
-                    SET summary = ?,
-                        summary_word_count = ?,
-                        compression_ratio = ?
-                    WHERE id = ?
-                """, (doc.summary, doc.summary_word_count, doc.compression_ratio, doc.id))
-                conn.commit()
+                # Store document summary in database using utility function
+                save_document_summary(
+                    celex_number=doc.celex_number,
+                    summary=doc.summary,
+                    summary_word_count=doc.summary_word_count,
+                    total_words=doc.total_words,
+                    compression_ratio=doc.compression_ratio,
+                    tier=tier,
+                    db_type=self.db_type
+                )
                 
                 processed_docs.append({
                     'celex_number': doc.celex_number,

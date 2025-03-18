@@ -62,8 +62,8 @@ class DocumentRanker:
         if doc_id in self.document_vectors:
             return self.document_vectors[doc_id]
             
-        # Generate text embedding
-        text_embedding = self.embedder.combine_text_features(summary, keywords)
+        # Generate text embedding with dynamic weighting based on number of keywords
+        text_embedding = self.embedder.combine_text_features(summary=summary, keywords=keywords)
         
         # Process categorical features
         categorical_features = self.feature_processor.encode_features(features)
@@ -123,10 +123,10 @@ class DocumentRanker:
         Returns:
             List of (document_id, similarity_score) tuples
         """
-        # Process query
+        # Process query with dynamic weighting based on number of keywords
         query_text_emb = self.embedder.combine_text_features(
-            query_profile['interests'],
-            query_profile['keywords']
+            summary=query_profile['interests'],
+            keywords=query_profile['keywords']
         )
         query_categorical = self.feature_processor.encode_features(
             query_profile['features']

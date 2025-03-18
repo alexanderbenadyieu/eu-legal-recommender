@@ -1,5 +1,5 @@
 """
-Clean the processed_documents database and reprocess all documents
+Clean and reprocess all documents in the consolidated database
 """
 import sqlite3
 from pathlib import Path
@@ -8,83 +8,58 @@ from tqdm import tqdm
 
 # Add parent directory to path to import parser
 sys.path.append(str(Path(__file__).parent.parent))
+sys.path.append(str(Path(__file__).parents[3]))  # Add project root to path
+
 from summarization.src.preprocessing.html_parser import LegalDocumentParser
+from database_utils import get_db_connection, save_document_section
 
 def get_word_count(text: str) -> int:
     """Get word count of text."""
     return len(text.split())
 
 def clean_database():
-    """Clean the processed_documents database"""
-    print("Cleaning processed_documents database...")
+    """Clean document sections in the consolidated database"""
+    print("Cleaning document sections in the consolidated database...")
     
-    conn = sqlite3.connect('summarization/data/processed_documents.db')
+    conn = get_db_connection(db_type='consolidated')
     cursor = conn.cursor()
     
     try:
-        # First get table names
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-        tables = cursor.fetchall()
+        # Delete all document sections
+        cursor.execute("DELETE FROM document_sections")
         
-        # Drop all non-system tables
-        for table in tables:
-            if table[0] != 'sqlite_sequence':
-                cursor.execute(f"DROP TABLE IF EXISTS {table[0]};")
-        
-        # Recreate tables
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS processed_documents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                celex_number TEXT UNIQUE NOT NULL,
-                html_url TEXT,
-                total_words INTEGER
-            )
-        """)
-        
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS document_sections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                document_id INTEGER NOT NULL,
-                title TEXT,
-                content TEXT NOT NULL,
-                section_type TEXT NOT NULL,
-                section_order INTEGER NOT NULL,
-                word_count INTEGER NOT NULL,
-                FOREIGN KEY (document_id) REFERENCES processed_documents(id)
-            )
-        """)
+        # Reset the auto-increment counter for document_sections
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='document_sections'")
         
         conn.commit()
-        print("Database cleaned successfully!")
+        print("Document sections cleaned successfully!")
         
     finally:
         conn.close()
 
 def process_documents():
-    """Process all documents from eurlex.db"""
+    """Process all documents from the consolidated database"""
     
     # Initialize parser
     parser = LegalDocumentParser(Path('.'))
     
-    # Connect to both databases
-    eurlex_conn = sqlite3.connect('scraper/data/eurlex.db')
-    processed_conn = sqlite3.connect('summarization/data/processed_documents.db')
-    
-    eurlex_cursor = eurlex_conn.cursor()
-    processed_cursor = processed_conn.cursor()
+    # Connect to the consolidated database
+    conn = get_db_connection(db_type='consolidated')
+    cursor = conn.cursor()
     
     try:
-        # Get all documents from eurlex.db
-        eurlex_cursor.execute("""
-            SELECT celex_number, content_html, html_url 
+        # Get all documents from the consolidated database
+        cursor.execute("""
+            SELECT document_id, celex_number, content_html, html_url 
             FROM documents
+            WHERE content_html IS NOT NULL
         """)
-        documents = eurlex_cursor.fetchall()
+        documents = cursor.fetchall()
         
         print(f"\nProcessing {len(documents)} documents...")
         
         # Process each document
-        for celex_number, html_content, html_url in tqdm(documents):
+        for document_id, celex_number, html_content, html_url in tqdm(documents):
             try:
                 # Parse HTML content
                 sections = parser.parse_html_content(html_content)
@@ -93,57 +68,50 @@ def process_documents():
                     print(f"\nWarning: No sections found for {celex_number}")
                     continue
                 
-                # Insert into processed_documents
-                processed_cursor.execute("""
-                    INSERT INTO processed_documents (celex_number, html_url)
-                    VALUES (?, ?)
-                """, (celex_number, html_url))
+                # Document already exists in the consolidated database
+                # We'll use the document_id directly
                 
-                document_id = processed_cursor.lastrowid
-                
-                # Insert sections
+                # Insert sections using the utility function
                 for order, section in enumerate(sections):
-                    processed_cursor.execute("""
-                        INSERT INTO document_sections 
-                        (document_id, title, content, section_type, section_order, word_count)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        document_id,
-                        section.title,
-                        section.content,
-                        section.section_type,
-                        order,
-                        get_word_count(section.content)
-                    ))
+                    word_count = get_word_count(section.content)
+                    
+                    save_document_section(
+                        document_id=document_id,
+                        title=section.title,
+                        content=section.content,
+                        section_type=section.section_type,
+                        section_order=order,
+                        word_count=word_count
+                    )
                 
-                # Update total word count
-                processed_cursor.execute("""
-                    UPDATE processed_documents 
-                    SET total_words = (
+                # Update total word count in the documents table
+                cursor.execute("""
+                    UPDATE documents 
+                    SET word_count = (
                         SELECT SUM(word_count)
                         FROM document_sections
                         WHERE document_id = ?
                     )
-                    WHERE id = ?
+                    WHERE document_id = ?
                 """, (document_id, document_id))
                 
-                processed_conn.commit()
+                conn.commit()
                 
             except Exception as e:
                 print(f"\nError processing {celex_number}: {str(e)}")
                 continue
         
         # Print statistics after processing
-        processed_cursor.execute("""
+        cursor.execute("""
             SELECT 
                 COUNT(*) as total_docs,
-                AVG(total_words) as avg_words,
-                MIN(total_words) as min_words,
-                MAX(total_words) as max_words
-            FROM processed_documents
-            WHERE total_words IS NOT NULL
+                AVG(word_count) as avg_words,
+                MIN(word_count) as min_words,
+                MAX(word_count) as max_words
+            FROM documents
+            WHERE word_count IS NOT NULL
         """)
-        stats = processed_cursor.fetchone()
+        stats = cursor.fetchone()
         
         print("\nProcessing complete!")
         print(f"Total Documents: {stats[0]}")
@@ -152,28 +120,27 @@ def process_documents():
         print(f"Max Words: {stats[3]}")
         
         # Print distribution across tiers
-        processed_cursor.execute("""
+        cursor.execute("""
             SELECT 
                 CASE 
-                    WHEN total_words <= 600 THEN 'Tier 1 (0-600)'
-                    WHEN total_words <= 2500 THEN 'Tier 2 (601-2500)'
-                    WHEN total_words <= 20000 THEN 'Tier 3 (2501-20000)'
+                    WHEN word_count <= 600 THEN 'Tier 1 (0-600)'
+                    WHEN word_count <= 2500 THEN 'Tier 2 (601-2500)'
+                    WHEN word_count <= 20000 THEN 'Tier 3 (2501-20000)'
                     ELSE 'Tier 4 (20000+)'
                 END as tier,
                 COUNT(*) as count
-            FROM processed_documents
-            WHERE total_words IS NOT NULL
+            FROM documents
+            WHERE word_count IS NOT NULL
             GROUP BY tier
-            ORDER BY MIN(total_words)
+            ORDER BY MIN(word_count)
         """)
         
         print("\nDistribution across tiers:")
-        for tier, count in processed_cursor.fetchall():
+        for tier, count in cursor.fetchall():
             print(f"{tier}: {count} documents")
             
     finally:
-        eurlex_conn.close()
-        processed_conn.close()
+        conn.close()
 
 if __name__ == "__main__":
     clean_database()

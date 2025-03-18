@@ -216,121 +216,112 @@ With \( L_{\text{final}} \) refined to around 600–750 words—sufficient to fi
 
 ---
 
-# Tier 4: Hierarchical Summarization for Documents (20,000–68,000 Words)
+# Tier 4 Summarization Process (20,000–117,000 Words)
 
-In Tier 4, we address longer legal documents by first processing each section individually and then combining these “chunks” into a global extract. Our goal is to produce a global extract that does not exceed 750 words, which is then summarized by BART to yield a final summary of 480–600 words. The extraction percentages are not fixed; they depend on computed compression factors. Below is the detailed process with the associated mathematical logic.
+In Tier 4, we handle documents between 20,000 and 117,000 words using a three-step approach that combines section-level abstractive summarization with weighted global extraction. Each step is carefully designed with specific thresholds and mathematical foundations to ensure effective compression while preserving key information.
 
 ---
 
 ## Step 1: Section-Based Pre-Summarization
 
-Each section of the document is processed based on its length:
+Each section of the document is processed based on its length using one of three approaches:
 
-1. **Section <750 Words:**  
+1. **Sections <750 Words:**  
    - **Action:**  
-     Apply a baseline BART summarization to the section, producing a summary with a maximum length of 350 words. This 350-word summary becomes the “chunk” for that section.
+     Direct BART summarization to ≤350 words
+   - **Rationale:**  
+     Short sections can be directly summarized without intermediate extraction
 
-2. **Section 750–1500 Words:**  
+2. **Sections 750–1500 Words:**  
    - **Action:**  
-     First, generate an extractive summary of the section (using an extraction process) to reduce it to approximately 600 words. Then, feed this 600-word text into baseline BART to produce a summary of up to 350 words.
+     Two-step process:
+     1. LexLM extraction to ~600 words
+     2. BART summarization to ≤350 words
+   - **Rationale:**  
+     Intermediate extraction helps focus BART on the most relevant content
 
-3. **Section >1500 Words:**  
+3. **Sections >1500 Words:**  
    - **Action:**  
-     Divide the section into multiple subsections, each with a maximum length of 1500 words. For each subsection, follow the same logic as for sections between 750 and 1500 words (i.e., reduce to about 600 words via extractive summarization, then generate a BART summary capped at 350 words).
+     1. Split into subsections (max 1500 words each)
+     2. For each subsection:
+        - LexLM extraction to ~600 words
+        - BART summarization to ≤350 words
+   - **Rationale:**  
+     Breaking long sections ensures consistent processing and prevents information loss
 
-After processing, each section (or subsection) is reduced to a “chunk” of at most 350 words. These chunks are then aggregated to form the global extraction, denoted as **Lₑ**.
+After processing, we have a collection of section summaries, each ≤350 words, which are combined into the global text Lₑ.
 
 ---
 
 ## Step 2: Global Dependent-Ratio Extraction
 
-If the aggregated extraction **Lₑ** exceeds our global target (T ≈ 750 words), we apply an additional extraction step across the chunks. The process is as follows:
+The combined section summaries are processed using a weighted extraction scheme to reach our target length of ~750 words.
 
-### A. Compute the Global Compression Factor
+### A. Compression Factor Calculation
 
-1. **Calculate f:**
-
+1. **Base Factor (f):**
    \[
    f = \frac{T}{Lₑ}
    \]
-   
-   where \( T \) is our target length (e.g., 750 words) and \( Lₑ \) is the total length of the aggregated chunks.
-
-2. **Enforce a Minimum Factor:**  
-   If \( f < 0.15 \), then set \( f = 0.15 \) to avoid over-compression.
-
-### B. Apply Weighted Extraction Across Chunks
-
-1. **Assume Lₑ is composed of ordered chunks** \( C_1, C_2, \dots, C_n \) (each up to 350 words).
-
-2. **Assign Weights:**  
-   To preserve critical content from earlier chunks, assign weights \( w_i \) that decrease with chunk order, e.g.:
-   - \( w_1 = 1.2 \)
-   - \( w_2 = 1.0 \)
-   - \( w_3 = 0.8 \)
-   - \( w_4 = 0.6 \)
-   - \( w_5 = 0.5 \)
-   - For \( i > 5 \), \( w_i = 0.5 \)
-
-3. **Determine Effective Extraction Percentage:**  
-   For each chunk \( C_i \) with length \( L_i \), compute:
-
-   \[
-   p_i = \text{clamp}(f \times w_i, \, p_{\min}, \, p_{\max})
-   \]
-   
    where:
-   - \( p_{\min} \) is the minimum extraction rate (e.g., 15% or 0.15),
-   - \( p_{\max} \) is the maximum extraction rate (e.g., 35% or 0.35).
+   - T = target length (750 words)
+   - Lₑ = total length of combined summaries
 
-4. **Extract from Each Chunk:**  
-   The extracted word count from chunk \( C_i \) is:
+2. **Minimum Protection:**
+   \[
+   f_{\text{final}} = \max(0.15, f)
+   \]
 
+### B. Weighted Extraction Process
+
+1. **Weight Assignment:**  
+   Each chunk Cᵢ gets a weight wᵢ based on position:
+   ```
+   w₁ = 1.2  (first chunk)
+   w₂ = 1.0  (second chunk)
+   w₃ = 0.8  (third chunk)
+   w₄ = 0.6  (fourth chunk)
+   w₅ = 0.5  (fifth chunk)
+   wᵢ = 0.5  (all subsequent chunks)
+   ```
+
+2. **Extraction Rate Calculation:**
+   For each chunk Cᵢ:
+   \[
+   p_i = \text{clamp}(f_{\text{final}} \times w_i, \, 0.15, \, 0.35)
+   \]
+   where:
+   - 0.15 = minimum extraction rate (15%)
+   - 0.35 = maximum extraction rate (35%)
+
+3. **Final Extraction:**
+   For each chunk Cᵢ with length Lᵢ:
    \[
    E_i = p_i \times L_i
    \]
-   
-   The refined global extraction \( L_{\text{final}} \) is obtained by concatenating all \( E_i \). Ideally, the sum \( \sum E_i \) is close to \( T \) (750 words).
 
-### C. Iteration
-
-- If \( L_{\text{final}} \) exceeds the target, recompute a new compression factor:
-
-  \[
-  f' = \frac{T}{L_{\text{final}}}
-  \]
-  
-  Clamp \( f' \) to a minimum of 0.15, and reapply the weighted extraction until \( L_{\text{final}} \) is within the desired range (around 750 words).
+The extracted chunks are concatenated to form L_{final}, targeting ~750 words.
 
 ---
 
 ## Step 3: Final Abstractive Summarization
 
-Once the global extraction \( L_{\text{final}} \) is refined to approximately 750 words, it is fed into an abstractive summarizer (baseline BART) to generate the final summary.
+The ~750-word extraction is processed by BART to generate the final summary:
 
-1. **Input:**  
-   \( L_{\text{final}} \) (≈750 words)
-
-2. **Abstractive Summarization:**  
-   Use baseline BART (with a context window suitable for 750 words) to produce a final summary. Set decoding parameters (e.g., min_length and max_length) to target an output of 480–600 words.
+- **Input:** L_{final} (~750 words)
+- **Output:** Final summary (480-600 words)
+- **Process:** Single-pass BART summarization with controlled output length
 
 ---
 
-## Summary of Tier 4 Process
+## Implementation Notes
 
-1. **Section-Based Pre-Summarization (Step 1):**
-   - Sections <750 words: Summarize to ≤350 words using baseline BART.
-   - Sections 750–1500 words: Extract to 600 words, then summarize to ≤350 words.
-   - Sections >1500 words: Divide into subsections (max 1500 words each), then for each, extract to 600 words and summarize to ≤350 words.
-   - Aggregate all section summaries to form \( Lₑ \).
+1. **Length Thresholds:**
+   - Section processing: 750, 1500 words
+   - Extraction targets: 600 words (intermediate), 750 words (global)
+   - BART summaries: 350 words (section), 480-600 words (final)
 
-2. **Global Dependent Extraction (Step 2):**
-   - Compute \( f = \frac{750}{Lₑ} \) (clamped to ≥0.15).
-   - For each chunk \( C_i \) (with length \( L_i \)), compute \( p_i = \text{clamp}(f \times w_i, \, 0.15, \, 0.35) \).
-   - Extract \( E_i = p_i \times L_i \) from each chunk.
-   - Concatenate \( E_i \) values; iterate if necessary until the global extraction is ~750 words.
-
-3. **Final Abstractive Summarization (Step 3):**
-   - Feed the 750-word refined extraction into BART, configured to produce a final summary of 480–600 words.
-
-This process allows us to handle longer documents (20,000–68,000 words) by first summarizing each section to a manageable chunk, then applying a global dependent extraction (with mathematically defined compression factors) that prioritizes earlier content, and finally generating a concise, coherent final summary with baseline BART.
+2. **Extraction Controls:**
+   - Compression factor: minimum 0.15
+   - Per-chunk extraction: 15-35%
+   - Weight range: 1.2 to 0.5

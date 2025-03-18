@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eu-legal-summarization"
+version = "0.1.0"
+description = "Summarization module for EU legal documents"
+readme = "README.md"
+authors = [
+    {name = "Alexander Benady"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # Dependencies will be read from requirements.txt during setup
+]
+
+[project.scripts]
+run-summarization = "summarization.src.run_pipeline:main"
+
+[tool.black]
+line-length = 100
+target-version = ["py38"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest]
+testpaths = ["src/testing"]
+python_files = "test_*.py"

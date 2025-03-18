@@ -7,6 +7,7 @@ from sentence_transformers import SentenceTransformer
 import logging
 from pathlib import Path
 import torch
+from sklearn.decomposition import PCA
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -16,7 +17,7 @@ class BERTEmbedder:
     """Generate and manage BERT embeddings for legal documents."""
     
     def __init__(self, 
-                 model_name: str = 'all-MiniLM-L6-v2',
+                 model_name: str = 'nlpaueb/legal-bert-base-uncased',
                  cache_dir: Union[str, Path] = None,
                  device: str = None):
         """
@@ -36,6 +37,9 @@ class BERTEmbedder:
         
         logger.info(f"Initializing {model_name} on {device}")
         self.model = SentenceTransformer(model_name, device=device)
+        
+        # Set embedding dimension based on model
+        self.embedding_dim = 768  # legal-bert-base-uncased has 768 dimensions
         
     def generate_embeddings(self, 
                           texts: List[str], 
@@ -62,14 +66,22 @@ class BERTEmbedder:
     def combine_text_features(self,
                             summary: str,
                             keywords: List[str],
-                            summary_weight: float = 0.7) -> np.ndarray:
+                            fixed_summary_weight: float = None,
+                            normalize: bool = True) -> np.ndarray:
         """
-        Combine summary and keyword embeddings with weights.
+        Combine summary and keyword embeddings with dynamic weights based on the number of keywords.
+        
+        The weights are calculated as follows:
+        - keyword_weight(n) = 0.1 + 0.01667 * (n - 2)
+        - summary_weight(n) = 1 - keyword_weight(n)
+        
+        This ensures that for documents with few keywords (n=2), the summary gets more weight (0.9),
+        while for documents with many keywords (n=20), the keywords get more weight (0.4).
         
         Args:
             summary: Document summary text
             keywords: List of keywords
-            summary_weight: Weight for summary embedding (1 - this will be keyword weight)
+            fixed_summary_weight: If provided, use this fixed weight instead of the dynamic calculation
             
         Returns:
             Combined embedding vector
@@ -82,12 +94,26 @@ class BERTEmbedder:
         keyword_text = ' '.join(keywords)
         keyword_emb = self.generate_embeddings([keyword_text], show_progress=False)[0]
         
+        # Calculate weights dynamically based on number of keywords
+        if fixed_summary_weight is None:
+            n = len(keywords)
+            # Implement the formula: w_keyword(n) = 0.1 + 0.01667 × (n - 2)
+            keyword_weight = max(0.1, min(0.4, 0.1 + 0.01667 * (n - 2)))
+            summary_weight = 1.0 - keyword_weight
+            logger.info(f"Dynamic weighting: {n} keywords, summary_weight={summary_weight:.4f}, keyword_weight={keyword_weight:.4f}")
+        else:
+            summary_weight = fixed_summary_weight
+            keyword_weight = 1.0 - summary_weight
+            logger.info(f"Fixed weighting: summary_weight={summary_weight:.4f}, keyword_weight={keyword_weight:.4f}")
+        
         # Combine with weights
-        keyword_weight = 1.0 - summary_weight
         combined_emb = summary_weight * summary_emb + keyword_weight * keyword_emb
         
-        # Normalize
-        return combined_emb / np.linalg.norm(combined_emb)
+        # Normalize if requested
+        if normalize:
+            combined_emb = combined_emb / np.linalg.norm(combined_emb)
+            
+        return combined_emb
     
     def cache_embeddings(self, 
                         document_id: str,
