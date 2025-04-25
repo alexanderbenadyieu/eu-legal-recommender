@@ -12,11 +12,7 @@ from typing import List, Dict, Any, Tuple
 from tqdm import tqdm
 
 # Import our database connector
-from utils.db_connector import get_connector, DocumentDBConnector
-
-# Add parent directory to path to import from models
-sys.path.append(str(Path(__file__).parent.parent))
-from models.embeddings import BERTEmbedder
+from .db_connector import get_connector, DocumentDBConnector
 
 # Set up logging
 logging.basicConfig(
@@ -37,8 +33,8 @@ class PineconeEmbeddingManager:
         api_key: str,
         environment: str,
         index_name: str,
-        dimension: int = 512,  # Default for legal-bert-small-uncased
-        embedder_model: str = 'nlpaueb/legal-bert-small-uncased',
+        dimension: int = 768,  # Default for legal-bert-base-uncased
+        embedder_model: str = 'nlpaueb/legal-bert-base-uncased',
         metric: str = 'cosine'
     ):
         """
@@ -57,6 +53,9 @@ class PineconeEmbeddingManager:
         self.index_name = index_name
         self.dimension = dimension
         self.metric = metric
+        
+        # Import BERTEmbedder here to avoid circular imports
+        from ..models.embeddings import BERTEmbedder
         
         # Initialize embedder
         self.embedder = BERTEmbedder(model_name=embedder_model)
@@ -178,9 +177,10 @@ class PineconeEmbeddingManager:
         
         embeddings_data = []
         for doc in tqdm(documents, desc="Generating embeddings"):
-            # Skip if summary is missing
-            if not doc['summary']:
-                logger.warning(f"Skipping document {doc['id']} - missing summary")
+            # Skip if summary is missing, None, or empty
+            if 'summary' not in doc or doc['summary'] is None or doc['summary'].strip() == '':
+                doc_id = doc.get('id', doc.get('celex_number', 'unknown'))
+                logger.warning(f"Skipping document {doc_id} - missing or empty summary")
                 continue
                 
             # Generate combined embedding from summary and keywords

@@ -5,16 +5,20 @@ This package contains the core functionality for the EU legal document recommend
 """
 
 # Import main components for easier access
-from recommender.src.models.embeddings import TextEmbedder
-from recommender.src.models.features import FeatureProcessor
-from recommender.src.models.similarity import SimilarityCalculator
-from recommender.src.models.pinecone_recommender import PineconeRecommender
-from recommender.src.models.ranker import DocumentRanker
+from .models.embeddings import BERTEmbedder
+from .models.features import FeatureProcessor
+from .models.similarity import SimilarityComputer
+from .models.pinecone_recommender import PineconeRecommender
+from .models.ranker import DocumentRanker
+from .models.user_profile import UserProfile
+from .models.personalized_recommender import PersonalizedRecommender
 
 __all__ = [
-    'TextEmbedder',
+    'BERTEmbedder',
     'FeatureProcessor',
-    'SimilarityCalculator',
+    'SimilarityComputer',
     'PineconeRecommender',
-    'DocumentRanker'
+    'DocumentRanker',
+    'UserProfile',
+    'PersonalizedRecommender'
 ]

@@ -1,5 +1,5 @@
 """
-Example script demonstrating usage of the Pinecone-based recommender system.
+Example script demonstrating document-to-document similarity using the Pinecone-based recommender system.
 """
 import sys
 import os
@@ -9,8 +9,9 @@ import argparse
 from pprint import pprint
 
 # Add parent directory to path to import recommender
-sys.path.append(str(Path(__file__).parents[1]))
+sys.path.append(str(Path(__file__).parents[2]))
 
+# Import directly from the module paths
 from src.models.pinecone_recommender import PineconeRecommender
 from src.models.features import FeatureProcessor
 
@@ -22,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Legal document recommendation example")
+    parser = argparse.ArgumentParser(description="Document-to-document similarity example")
     
     parser.add_argument("--pinecone-api-key", type=str, 
                         default=os.environ.get("PINECONE_API_KEY"),
@@ -32,15 +33,11 @@ def parse_args():
                         default="eu-legal-documents-legal-bert",
                         help="Pinecone index name")
     
-    parser.add_argument("--query", type=str,
-                        default="Climate change and environmental protection measures",
-                        help="Query text for recommendations")
-    
-    parser.add_argument("--document-id", type=str,
-                        help="Document ID to find similar documents (alternative to query)")
+    parser.add_argument("--document-id", type=str, required=True,
+                        help="CELEX number of the document to find similar documents for")
     
     parser.add_argument("--top-k", type=int, default=5,
-                        help="Number of recommendations to return")
+                        help="Number of similar documents to return")
     
     parser.add_argument("--filter-type", type=str, choices=["regulation", "directive", "decision"],
                         help="Filter results by document type")
@@ -79,49 +76,32 @@ def main():
     if args.filter_type:
         filter_dict = {"metadata": {"type": args.filter_type}}
     
-    # Example query features
-    query_features = {
-        'type': 'directive' if args.filter_type == 'directive' else 'regulation',
-        'subject': 'environment',  # Example subject for environmental query
-        'scope': 'EU-wide',
-        'legal_basis': 'TFEU_192'  # Environment legal basis
-    }
-    
-    # Get recommendations
-    if args.document_id:
-        logger.info(f"Finding documents similar to ID: {args.document_id}")
-        recommendations = recommender.get_recommendations_by_id(
-            document_id=args.document_id,
-            top_k=args.top_k,
-            filter=filter_dict
-        )
-    else:
-        logger.info(f"Getting recommendations for query: '{args.query}'")
-        logger.info(f"Using categorical features: {query_features}")
-        recommendations = recommender.get_recommendations(
-            query_text=args.query,
-            query_keywords=["climate", "emissions", "environment", "regulation"],
-            query_features=query_features,
-            top_k=args.top_k,
-            filter=filter_dict
-        )
+    # Get recommendations based on document ID
+    logger.info(f"Finding documents similar to ID: {args.document_id}")
+    recommendations = recommender.get_recommendations_by_id(
+        document_id=args.document_id,
+        top_k=args.top_k,
+        filter=filter_dict
+    )
     
     # Display results
-    logger.info(f"Top {len(recommendations)} recommendations:")
+    logger.info(f"Found {len(recommendations)} similar documents")
+    
     for i, rec in enumerate(recommendations):
-        print(f"\n{i+1}. Document ID: {rec['id']} (Score: {rec['score']:.4f})")
+        logger.info(f"\n{i+1}. Document ID: {rec['id']} (Score: {rec['score']:.4f})")
+        logger.info(f"   Text Similarity: {rec['text_score']:.4f}")
         
-        # Show component scores if available
-        if rec.get('text_score') is not None:
-            print(f"   Text Similarity: {rec['text_score']:.4f}")
         if rec.get('categorical_score') is not None:
-            print(f"   Categorical Similarity: {rec['categorical_score']:.4f}")
-            
+            logger.info(f"   Categorical Similarity: {rec['categorical_score']:.4f}")
+        
         if rec.get('metadata'):
-            print("   Metadata:")
+            logger.info("   Metadata:")
             for key, value in rec['metadata'].items():
-                if key != 'categorical_features':  # Skip showing raw categorical features
-                    print(f"   - {key}: {value}")
+                if key == 'summary' and value:
+                    # Truncate summary to first 200 characters
+                    logger.info(f"   - {key}: {value[:200]}...")
+                else:
+                    logger.info(f"   - {key}: {value}")
 
 if __name__ == "__main__":
     main()

@@ -10,10 +10,9 @@ env/
 .env/
 
 # Data directories
-data/
-*.json
-*.csv
-*.xlsx
+summarization/data/*.json
+# Allow profile JSON files
+!**/profiles/*.json
 
 # Logs and metrics
 logs/
@@ -32,10 +31,6 @@ Thumbs.db
 
 # Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-
-# Configuration files with sensitive information
-config/secrets.yaml
-config/config.local.yaml
 
 # Build and distribution files
 build/

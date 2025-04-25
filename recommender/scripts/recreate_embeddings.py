@@ -14,9 +14,9 @@ from tqdm import tqdm
 # Add the parent directory to the path so we can import modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.embeddings import BERTEmbedder
-from utils.pinecone_embeddings import PineconeEmbeddingManager
-from utils.db_connector import get_connector
+from src.models.embeddings import BERTEmbedder
+from src.utils.pinecone_embeddings import PineconeEmbeddingManager
+from src.utils.db_connector import get_connector
 
 # Configure logging
 logging.basicConfig(
@@ -43,7 +43,7 @@ def main():
     if not pinecone_api_key:
         logger.error("PINECONE_API_KEY not found in environment variables")
         sys.exit(1)
-    
+        
     # Initialize embedder with the legal-bert-base-uncased model directly
     logger.info("Initializing BERT embedder with legal-bert-base-uncased model")
     embedder = BERTEmbedder(model_name='nlpaueb/legal-bert-base-uncased')
@@ -54,7 +54,7 @@ def main():
     embedding_manager = PineconeEmbeddingManager(
         api_key=pinecone_api_key,
         environment=pinecone_environment,
-        index_name='eu-legal-docs',
+        index_name='eu-legal-documents-legal-bert',
         dimension=768,  # legal-bert-base-uncased has 768 dimensions
         embedder_model='nlpaueb/legal-bert-base-uncased'  # Use the same model as the embedder
     )
@@ -65,11 +65,16 @@ def main():
     # Determine the database path based on the database type
     if args.db_type == 'consolidated':
         # Use the consolidated database from the scraper directory
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
                               'scraper', 'data', 'eurlex.db')
+        # Make sure path is correct with eu-legal-recommender
+        if not os.path.exists(db_path):
+            # Alternative path with the full project structure
+            db_path = os.path.join('/Users/alexanderbenady/DataThesis/eu-legal-recommender',
+                                  'scraper', 'data', 'eurlex.db')
     else:  # legacy
         # Use the processed_documents.db from the summarization directory
-        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 
+        db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 
                               'summarization', 'data', 'processed_documents.db')
     
     logger.info(f"Using {args.db_type} database at: {db_path}")

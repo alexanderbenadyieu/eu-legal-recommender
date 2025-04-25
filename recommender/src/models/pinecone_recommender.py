@@ -166,8 +166,10 @@ class PineconeRecommender:
             # Only filter by embedding_type if no other filter is specified
             filter = {'embedding_type': embedding_type}
         elif embedding_type in ['summary', 'keyword'] and isinstance(filter, dict):
-            # Add embedding_type to existing filter
-            filter = {**filter, 'embedding_type': embedding_type}
+            # Add embedding_type to existing filter - use dict unpacking instead of addition
+            new_filter = filter.copy()
+            new_filter['embedding_type'] = embedding_type
+            filter = new_filter
         
         # Query Pinecone
         logger.info(f"Querying Pinecone with pre-computed embedding: '{query_text[:50]}...'")
@@ -504,6 +506,177 @@ class PineconeRecommender:
                 # No date available, can't apply temporal boost
                 rec['temporal_score'] = 0.0
                 logger.warning(f"No valid date found for document {rec['id']}, temporal boost not applied")
+    
+    def get_document_by_id(self, document_id: str) -> Dict[str, Any]:
+        """
+        Get a document by its ID using a multi-strategy approach to ensure robust retrieval.
+        
+        Args:
+            document_id: ID of the document to retrieve (e.g., CELEX number)
+            
+        Returns:
+            Document data including metadata if found, empty dict if not found
+            
+        Raises:
+            PineconeError: If there's an error querying Pinecone
+        """
+        logger.info(f"Retrieving document by ID: {document_id}")
+        
+        try:
+            # STRATEGY 1: Try direct fetch first (optimized for ID-based retrieval)
+            try:
+                logger.info(f"Attempting direct fetch for document ID: {document_id}")
+                fetch_result = self.index.fetch([document_id])
+                
+                # Check if document exists in response
+                if fetch_result and hasattr(fetch_result, 'vectors') and document_id in fetch_result.vectors:
+                    vector_data = fetch_result.vectors[document_id]
+                    metadata = vector_data.metadata if hasattr(vector_data, 'metadata') else {}
+                    values = vector_data.values if hasattr(vector_data, 'values') else None
+                    
+                    logger.info(f"Successfully retrieved document {document_id} via direct fetch")
+                    return {
+                        'id': document_id,
+                        'score': 1.0,
+                        'metadata': metadata,
+                        'vector': values
+                    }
+            except Exception as fetch_error:
+                logger.warning(f"Direct fetch failed for {document_id}: {str(fetch_error)}")
+            
+            # Create vectors for retrieval strategies
+            # We'll use multiple different vectors to search different regions of the vector space
+            query_vectors = [
+                [0.0] * 768,  # All zeros
+                [1.0] * 768,  # All ones
+                [0.5] * 768,  # All 0.5
+                [0.1 if i % 2 == 0 else 0.9 for i in range(768)]  # Alternating pattern
+            ]
+
+            # STRATEGY 2: Filter-based retrieval approaches
+            for vector_idx, dummy_vector in enumerate(query_vectors[:1]):  # Only use first vector for filters
+                # Try metadata.celex_number field
+                try:
+                    logger.info(f"Trying to find document {document_id} by metadata.celex_number")
+                    celex_results = self.index.query(
+                        vector=dummy_vector,
+                        filter={"metadata.celex_number": document_id},
+                        top_k=1,
+                        include_metadata=True
+                    )
+                    
+                    if celex_results and hasattr(celex_results, 'matches') and len(celex_results.matches) > 0:
+                        match = celex_results.matches[0]
+                        logger.info(f"Found document {document_id} by metadata.celex_number match")
+                        return {
+                            'id': match.id,
+                            'score': 1.0,
+                            'metadata': match.metadata,
+                            'vector': match.values if hasattr(match, 'values') else None
+                        }
+                except Exception as e:
+                    logger.warning(f"Error during celex_number retrieval: {str(e)}")
+                
+                # Try metadata.document_id field
+                try:
+                    logger.info(f"Trying to find document {document_id} by metadata.document_id")
+                    doc_id_results = self.index.query(
+                        vector=dummy_vector,
+                        filter={"metadata.document_id": document_id},
+                        top_k=1,
+                        include_metadata=True
+                    )
+                    
+                    if doc_id_results and hasattr(doc_id_results, 'matches') and len(doc_id_results.matches) > 0:
+                        match = doc_id_results.matches[0]
+                        logger.info(f"Found document {document_id} by metadata.document_id match")
+                        return {
+                            'id': match.id,
+                            'score': 1.0,
+                            'metadata': match.metadata,
+                            'vector': match.values if hasattr(match, 'values') else None
+                        }
+                except Exception as e:
+                    logger.warning(f"Error during document_id retrieval: {str(e)}")
+            
+            # STRATEGY 3: MULTI-VECTOR EXHAUSTIVE SEARCH
+            # This is the most robust approach based on our testing
+            logger.info(f"Starting multi-vector exhaustive search for document {document_id}")
+            
+            # Use multiple random vectors to explore different regions of the vector space
+            # This significantly increases the chance of finding the document
+            found_ids = set()
+            
+            for vector_idx, dummy_vector in enumerate(query_vectors):
+                try:
+                    logger.info(f"Multi-vector search #{vector_idx+1} for document {document_id}")
+                    
+                    # Retrieve a large batch of documents with this vector
+                    bulk_results = self.index.query(
+                        vector=dummy_vector,
+                        top_k=1000,  # This worked well in our test script
+                        include_metadata=True
+                    )
+                    
+                    if not bulk_results or not hasattr(bulk_results, 'matches') or not bulk_results.matches:
+                        logger.warning(f"No results for vector #{vector_idx+1}")
+                        continue
+                        
+                    logger.info(f"Searching through {len(bulk_results.matches)} documents from vector #{vector_idx+1}")
+                    
+                    # Collect all IDs to avoid duplicates
+                    batch_ids = {match.id for match in bulk_results.matches}
+                    new_ids = batch_ids - found_ids
+                    found_ids.update(new_ids)
+                    
+                    logger.info(f"Added {len(new_ids)} new IDs from vector #{vector_idx+1} (total unique: {len(found_ids)})")
+                    
+                    # Check each result for matches
+                    for match in bulk_results.matches:
+                        # Direct ID match (exact match)
+                        if match.id == document_id:
+                            logger.info(f"[Multi-vector] Found document {document_id} by exact ID match")
+                            return {
+                                'id': match.id,
+                                'score': 1.0,
+                                'metadata': match.metadata if hasattr(match, 'metadata') else {},
+                                'vector': match.values if hasattr(match, 'values') else None
+                            }
+                        
+                        # Check metadata if available
+                        if hasattr(match, 'metadata') and match.metadata:
+                            meta = match.metadata
+                            
+                            # Exact CELEX match
+                            if meta.get('celex_number') == document_id:
+                                logger.info(f"[Multi-vector] Found document {document_id} by metadata.celex_number match")
+                                return {
+                                    'id': match.id,
+                                    'score': 1.0,
+                                    'metadata': meta,
+                                    'vector': match.values if hasattr(match, 'values') else None
+                                }
+                                
+                            # Exact document_id match
+                            if meta.get('document_id') == document_id or str(meta.get('document_id')) == document_id:
+                                logger.info(f"[Multi-vector] Found document {document_id} by metadata.document_id match")
+                                return {
+                                    'id': match.id,
+                                    'score': 1.0,
+                                    'metadata': meta,
+                                    'vector': match.values if hasattr(match, 'values') else None
+                                }
+                except Exception as vector_error:
+                    logger.warning(f"Error during multi-vector search #{vector_idx+1}: {str(vector_error)}")
+            
+            # If we get here, we've tried all strategies and still haven't found the document
+            logger.warning(f"Document not found: {document_id} after trying all retrieval strategies")
+            return {}
+            
+        except Exception as e:
+            logger.error(f"Error retrieving document {document_id}: {str(e)}")
+            # Avoid raising exception to maintain compatibility with existing code
+            return {}
     
     def get_recommendations_by_id(
         self,

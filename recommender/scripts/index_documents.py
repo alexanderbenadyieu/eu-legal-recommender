@@ -16,9 +16,10 @@ from dotenv import load_dotenv
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from models.pinecone_recommender import PineconeRecommender
-from models.features import FeatureProcessor
-from utils.db_connector import get_connector
+from src.utils.pinecone_embeddings import PineconeEmbeddingManager
+from src.models.features import FeatureProcessor
+from src.models.embeddings import BERTEmbedder  # Import BERTEmbedder as it's needed by PineconeEmbeddingManager
+from src.utils.db_connector import get_connector
 
 # Configure logging
 logging.basicConfig(
@@ -35,7 +36,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Index EU legal documents into Pinecone')
     parser.add_argument('--db-path', type=str, default=os.getenv('DB_PATH', 'data/eu_legal_docs.db'),
                         help='Path to the SQLite database')
-    parser.add_argument('--index-name', type=str, default=os.getenv('PINECONE_INDEX', 'eu-legal-docs'),
+    parser.add_argument('--index-name', type=str, default=os.getenv('PINECONE_INDEX', 'eu-legal-documents-legal-bert'),
                         help='Name of the Pinecone index')
     parser.add_argument('--batch-size', type=int, default=50,
                         help='Batch size for indexing documents')
@@ -82,7 +83,7 @@ def initialize_feature_processor(db_path: str) -> FeatureProcessor:
     
     return feature_processor
 
-def index_documents(recommender: PineconeRecommender, db_connector: Any, 
+def index_documents(embedding_manager: PineconeEmbeddingManager, db_connector: Any, 
                    tiers: List[int], batch_size: int, limit: Optional[int] = None) -> None:
     """Index documents from the database into Pinecone."""
     total_indexed = 0
@@ -99,30 +100,22 @@ def index_documents(recommender: PineconeRecommender, db_connector: Any,
             
         logger.info(f"Found {len(documents)} documents in tier {tier}")
         
-        # Process documents in batches
-        for i in range(0, len(documents), batch_size):
-            batch = documents[i:i+batch_size]
-            batch_ids = [doc.get('id') for doc in batch]
+        try:
+            # Generate embeddings
+            embeddings_data = embedding_manager.generate_document_embeddings(documents)
             
-            logger.info(f"Indexing batch {i//batch_size + 1}/{(len(documents) + batch_size - 1)//batch_size} from tier {tier}")
+            # Upload to Pinecone
+            embedding_manager.upload_to_pinecone(embeddings_data, batch_size)
             
-            try:
-                # Index the batch
-                recommender.index_documents(batch)
-                total_indexed += len(batch)
-                
-                logger.info(f"Successfully indexed {len(batch)} documents, total: {total_indexed}")
-                
-                # Log some document IDs for reference
-                logger.debug(f"Indexed document IDs: {batch_ids[:5]}...")
-                
-            except Exception as e:
-                logger.error(f"Error indexing batch: {str(e)}")
-                logger.error(f"Failed document IDs: {batch_ids}")
-                continue
+            total_indexed += len(documents)
+            logger.info(f"Successfully indexed {len(documents)} documents from tier {tier}, total: {total_indexed}")
             
-            # Sleep briefly to avoid overwhelming the API
-            time.sleep(0.5)
+        except Exception as e:
+            logger.error(f"Error indexing tier {tier} documents: {str(e)}")
+            continue
+            
+        # Sleep briefly to avoid overwhelming the API
+        time.sleep(1.0)
     
     elapsed_time = time.time() - start_time
     logger.info(f"Indexing completed. Total documents indexed: {total_indexed}")
@@ -145,26 +138,23 @@ def main():
     tiers = [int(tier) for tier in args.tiers.split(',')]
     logger.info(f"Will index documents from tiers: {tiers}")
     
-    # Initialize feature processor
+    # Initialize feature processor (still useful for document metadata)
     feature_processor = initialize_feature_processor(args.db_path)
     
-    # Initialize recommender
-    logger.info("Initializing enhanced Pinecone recommender with legal-bert-base-uncased model")
-    recommender = PineconeRecommender(
+    # Initialize embedding manager
+    logger.info("Initializing PineconeEmbeddingManager with legal-bert-base-uncased model")
+    embedding_manager = PineconeEmbeddingManager(
         api_key=pinecone_api_key,
+        environment="gcp-starter",  # Using serverless environment
         index_name=args.index_name,
-        embedder_model='nlpaueb/legal-bert-base-uncased',
-        feature_processor=feature_processor,
-        text_weight=args.text_weight,
-        categorical_weight=args.categorical_weight,
-        dimension=args.dimension
+        dimension=args.dimension,
+        embedder_model='nlpaueb/legal-bert-base-uncased'
     )
     
     # Recreate index if requested
     if args.recreate_index:
         logger.warning("Recreating Pinecone index - this will delete all existing data!")
-        recommender.delete_index()
-        recommender.create_index(dimension=args.dimension)
+        embedding_manager.delete_and_recreate_index()
         logger.info(f"Created new Pinecone index '{args.index_name}' with dimension {args.dimension}")
     
     # Connect to the database
@@ -173,7 +163,7 @@ def main():
     
     # Index documents
     index_documents(
-        recommender=recommender,
+        embedding_manager=embedding_manager,
         db_connector=db_connector,
         tiers=tiers,
         batch_size=args.batch_size,
