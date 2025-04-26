@@ -47,3 +47,6 @@ output/
 cache/
 temp/scraper/data/eurlex.db
 *.db
+*.db
+scraper/data/eurlex.db
+
