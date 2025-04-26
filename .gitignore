@@ -46,3 +46,4 @@ dist/
 output/
 cache/
 temp/scraper/data/eurlex.db
+*.db
