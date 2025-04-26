@@ -45,4 +45,4 @@ dist/
 # Specific to this project
 output/
 cache/
-temp/
+temp/scraper/data/eurlex.db
