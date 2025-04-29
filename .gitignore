@@ -50,3 +50,5 @@ temp/scraper/data/eurlex.db
 *.db
 scraper/data/eurlex.db
 
+scraper/data/eurlex.db
+recommender/logs/*.log
