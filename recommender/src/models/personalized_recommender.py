@@ -621,15 +621,14 @@ class PersonalizedRecommender:
             )
             
             # Use copy.deepcopy to ensure a completely independent copy of the preferences
-            # This prevents any issues with nested dictionaries or shared references
             if preferences is not None and isinstance(preferences, dict):
-                # Create a full deep copy of all nested structures 
-                # Using our safe dictionary merge utility to ensure no + operations
-                safe_preferences = self._safe_merge_dicts(preferences)
+                # Create a full deep copy of all nested structures
+                safe_preferences = copy.deepcopy(preferences)
                 return embedding, safe_preferences
             else:
                 # Return an empty dictionary if preferences is None or not a dictionary
                 return embedding, {}
+            
         except Exception as e:
             logger.error(f"Error in _safe_get_composite_profile: {str(e)}")
             # Re-raise with clearer message if this is a dictionary addition error
@@ -880,12 +879,26 @@ class PersonalizedRecommender:
             query_embedding = None
             if query_text or query_keywords:
                 try:
-                    # Generate query embedding
-                    query_embedding = self.recommender.generate_embedding(
-                        text=query_text,
-                        keywords=query_keywords,
-                        embedding_type=embedding_type
-                    )
+                    # Generate query embedding using the embedder directly
+                    if hasattr(self.recommender, 'generate_embedding'):
+                        query_embedding = self.recommender.generate_embedding(
+                            text=query_text,
+                            keywords=query_keywords,
+                            embedding_type=embedding_type
+                        )
+                    else:
+                        # The BERTEmbedder.generate_embedding only accepts text parameter
+                        query_embedding = self.recommender.embedder.generate_embedding(text=query_text)
+                        
+                        # If we have keywords, combine them with the summary (if the combine_text_features method exists)
+                        if query_keywords and hasattr(self.recommender.embedder, 'combine_text_features'):
+                            try:
+                                query_embedding = self.recommender.embedder.combine_text_features(
+                                    summary=query_text,
+                                    keywords=query_keywords
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to combine keywords with text: {str(e)}")
                 except Exception as e:
                     logger.error(f"Error generating query embedding: {str(e)}")
                     if isinstance(e, EmbeddingError):

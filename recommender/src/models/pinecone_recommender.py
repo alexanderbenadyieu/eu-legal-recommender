@@ -106,7 +106,7 @@ class PineconeRecommender:
             logger.info(f"Connected to Pinecone index with {stats.total_vector_count} vectors")
             logger.debug(f"Vector dimension: {stats.dimension}")
             
-        except pinecone.core.client.exceptions.ApiException as e:
+        except Exception as e:  # Handle any Pinecone API exceptions
             logger.error(f"Pinecone API error: {str(e)}")
             raise PineconeError(f"API error: {str(e)}", code="API_ERROR")
         except Exception as e:
@@ -181,7 +181,7 @@ class PineconeRecommender:
                 filter=filter
             )
             logger.debug(f"Received {len(results.matches)} matches from Pinecone")
-        except pinecone.core.client.exceptions.ApiException as e:
+        except Exception as e:  # Handle any Pinecone API exceptions
             logger.error(f"Pinecone query error: {str(e)}")
             raise PineconeError(f"Query error: {str(e)}", code="QUERY_ERROR")
         except Exception as e:
@@ -732,7 +732,7 @@ class PineconeRecommender:
             doc_metadata = fetch_response.vectors[document_id].metadata
             logger.debug(f"Retrieved document metadata: {list(doc_metadata.keys()) if doc_metadata else 'None'}")
             
-        except pinecone.core.client.exceptions.ApiException as e:
+        except Exception as e:  # Handle any Pinecone API exceptions
             logger.error(f"Pinecone API error while fetching document: {str(e)}")
             raise PineconeError(f"Error fetching document: {str(e)}", code="FETCH_ERROR")
         except ValidationError:
@@ -778,7 +778,7 @@ class PineconeRecommender:
             )
             logger.debug(f"Received {len(results.matches)} matches from Pinecone")
             
-        except pinecone.core.client.exceptions.ApiException as e:
+        except Exception as e:  # Handle any Pinecone API exceptions
             logger.error(f"Pinecone query error: {str(e)}")
             raise PineconeError(f"Query error: {str(e)}", code="QUERY_ERROR")
         except Exception as e:
