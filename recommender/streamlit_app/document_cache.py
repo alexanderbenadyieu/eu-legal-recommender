@@ -116,7 +116,12 @@ def generate_cache_key(params: Dict) -> str:
         if isinstance(value, (list, dict)):
             # Convert complex types to sorted string representation
             value = json.dumps(value, sort_keys=True)
+        # Make sure we differentiate between different profiles even if mode is the same
         key_parts.append(f"{key}:{value}")
+    
+    # Add timestamp to force refresh on cold start (optional, remove if cached results needed)
+    # import time
+    # key_parts.append(f"timestamp:{int(time.time())}")
     
     return "|".join(key_parts)
 

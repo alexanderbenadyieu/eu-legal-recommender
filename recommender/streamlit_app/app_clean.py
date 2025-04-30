@@ -188,12 +188,25 @@ def run_recommendations():
         # Get mode and parameters
         mode = st.session_state.recommendation_mode
         
+        # Get the appropriate profile based on the current mode
+        profile_key = None
+        selected_profile = None
+        if mode == "query_with_profile":
+            profile_key = "profile"
+        elif mode == "document_with_profile":
+            profile_key = "profile_for_doc"
+        elif mode == "profile_only":
+            profile_key = "profile_only"
+        
+        if profile_key:
+            selected_profile = st.session_state.get(profile_key, None)
+        
         # Check if results are in cache
         cache_params = {
             "mode": mode,
             "query": st.session_state.get("query", ""),
             "document_id": st.session_state.get("document_id", ""),
-            "profile": st.session_state.get("profile", ""),
+            "profile_name": selected_profile,  # Use the selected profile name based on mode
             "top_k": st.session_state.get("top_k", 5),
             "filter_type": st.session_state.get("filter_type", ""),
             "use_temporal_boost": st.session_state.get("use_temporal_boost", False),
@@ -223,7 +236,7 @@ def run_recommendations():
             # Create appropriate recommender based on whether a profile is being used
             if mode in ["query_with_profile", "document_with_profile", "profile_only"]:
                 # Use PersonalizedRecommender if a profile is involved
-                logger.info(f"Using PersonalizedRecommender with profile: {st.session_state.profile}")
+                logger.info(f"Using PersonalizedRecommender with profile: {selected_profile}")
                 try:
                     recommender = PersonalizedRecommender(
                         api_key=api_key,
@@ -235,18 +248,6 @@ def run_recommendations():
                     st.error(f"Failed to initialize recommender: {str(e)}")
                     logger.error(f"Recommender initialization error: {str(e)}")
                     return []
-                
-                # Get the appropriate profile based on the current mode
-                profile_key = None
-                if mode == "query_with_profile":
-                    profile_key = "profile"
-                elif mode == "document_with_profile":
-                    profile_key = "profile_for_doc"
-                elif mode == "profile_only":
-                    profile_key = "profile_only"
-                
-                # Make sure we use the correct profile variable based on current mode
-                selected_profile = st.session_state.get(profile_key, None)
                 
                 if selected_profile:
                     st.write(f"Using profile: {selected_profile}")
