@@ -54,7 +54,8 @@ from streamlit_app.document_cache import (
     add_document_to_cache,
     get_recommendations_from_cache,
     add_recommendations_to_cache,
-    generate_cache_key
+    generate_cache_key,
+    get_document_from_database
 )
 
 # Set up page config
@@ -67,6 +68,59 @@ st.set_page_config(
 
 def draw_header():
     """Draw the header and app title."""
+    # Add custom CSS for better styling of document preview and summaries
+    st.markdown("""
+    <style>
+    .document-preview {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 20px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .summary-box {
+        background-color: #eff7ff;
+        border-left: 3px solid #0d6efd;
+        padding: 10px;
+        margin-top: 10px;
+        border-radius: 3px;
+    }
+    
+    .recommendation-card {
+        border: 1px solid #dee2e6;
+        border-radius: 5px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background-color: white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        transition: transform 0.2s;
+    }
+    
+    .recommendation-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .recommendation-card h3 {
+        color: #0d6efd;
+        border-bottom: 1px solid #e9ecef;
+        padding-bottom: 8px;
+    }
+    
+    .recommendation-card a {
+        color: #0d6efd;
+        text-decoration: none;
+        font-weight: bold;
+    }
+    
+    .recommendation-card a:hover {
+        text-decoration: underline;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
     # Set logo and title
     col1, col2 = st.columns([1, 5])
     with col1:
@@ -499,6 +553,77 @@ def main():
             
             if custom_id:
                 st.session_state.document_id = custom_id
+                
+        # Document preview - show metadata for the selected document
+        current_doc_id = st.session_state.document_id
+        if current_doc_id:
+            st.subheader("Document Preview")
+            
+            # Create a spinner while fetching document metadata
+            with st.spinner(f"Loading document metadata for {current_doc_id}..."):
+                # Get document data from cache or Pinecone
+                try:
+                    # Try to get from cache first
+                    document = get_document_from_cache(current_doc_id)
+                    
+                    if not document:
+                        # If not in cache, try to get from SQLite database
+                        document = get_document_from_database(current_doc_id)
+                        
+                        # Cache the document
+                        if document:
+                            add_document_to_cache(current_doc_id, document)
+                    
+                    if document:
+                        # Extract metadata
+                        metadata = document.get('metadata', {})
+                        if not metadata and isinstance(document, dict):
+                            # If no metadata key but document is a dict, use it directly
+                            metadata = document
+                            
+                        title = metadata.get('title', 'No title available')
+                        doc_type = metadata.get('document_type', 'Unknown')
+                        
+                        # Get date information with fallbacks
+                        date = metadata.get('date', metadata.get('publication_date', metadata.get('adoption_date', 'N/A')))
+                        if date == 'N/A' or not date:
+                            date = metadata.get('year', 'N/A')
+                        
+                        celex = metadata.get('celex_number', current_doc_id)
+                        subject_matters = metadata.get('subject_matters', [])
+                        
+                        # Get EUR-Lex URL
+                        eurlex_url = metadata.get('url', '')
+                        if not eurlex_url and celex != 'N/A':
+                            eurlex_url = f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex}"
+                        
+                        # Get summary if available
+                        summary = metadata.get('summary', document.get('summary', ''))
+                        if not summary and 'text' in metadata and metadata['text']:
+                            # Use first 300 chars of text as preview
+                            summary = metadata['text'][:300] + '...' if len(metadata['text']) > 300 else metadata['text']
+                        
+                        # Create a formatted display of the document info
+                        st.info(f"Found document: {title}")
+                        
+                        # Display document info in a nice box
+                        with st.container():
+                            st.markdown(f"""<div class='document-preview'>
+                                <h4>{title}</h4>
+                                <p><strong>Document ID:</strong> {current_doc_id}</p>
+                                <p><strong>CELEX:</strong> {celex}</p>
+                                <p><strong>Type:</strong> {doc_type} | <strong>Date:</strong> {date}</p>
+                                <p><strong>Subject Matters:</strong> {', '.join(subject_matters[:5])}{' ...' if len(subject_matters) > 5 else ''}</p>
+                                {f'<p><a href="{eurlex_url}" target="_blank">View on EUR-Lex</a></p>' if eurlex_url else ''}
+                                {f'<div class="summary-box"><strong>Summary:</strong><br>{summary}</div>' if summary else ''}
+                            </div>""", unsafe_allow_html=True)
+                            
+                    else:
+                        st.warning(f"Could not retrieve metadata for document {current_doc_id}. Check if the ID is correct.")
+                        
+                except Exception as e:
+                    st.error(f"Error retrieving document metadata: {str(e)}")
+                    logger.error(f"Error in document preview: {str(e)}", exc_info=True)
         
         # Use profile option
         use_profile_with_doc = st.checkbox(

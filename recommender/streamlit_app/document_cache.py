@@ -11,6 +11,7 @@ import pickle
 import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional, Union
+import sqlite3
 
 # Set up logging
 logging.basicConfig(
@@ -126,15 +127,157 @@ def generate_cache_key(params: Dict) -> str:
     return "|".join(key_parts)
 
 def clear_cache() -> None:
-    """Clear all cache files."""
+    """Clear all caches."""
+    logger.info("Clearing all caches")
+    _clear_document_cache()
+    _clear_recommendation_cache()
+
+def _clear_document_cache() -> None:
     try:
         if DOCUMENT_CACHE_FILE.exists():
             DOCUMENT_CACHE_FILE.unlink()
+        logger.info("Document cache cleared successfully")
+    except Exception as e:
+        logger.warning(f"Failed to clear document cache: {str(e)}")
+
+def _clear_recommendation_cache() -> None:
+    try:
         if RECOMMENDATION_CACHE_FILE.exists():
             RECOMMENDATION_CACHE_FILE.unlink()
-        logger.info("Cache cleared successfully")
+        logger.info("Recommendation cache cleared successfully")
     except Exception as e:
-        logger.warning(f"Failed to clear cache: {str(e)}")
+        logger.warning(f"Failed to clear recommendation cache: {str(e)}")
+
+def get_document_from_database(document_id: str) -> Dict:
+    """Get document metadata from SQLite database.
+    
+    Args:
+        document_id: The document ID (CELEX number) to retrieve
+        
+    Returns:
+        Dictionary containing document metadata or empty dict if not found
+    """
+    try:
+        # Path to the SQLite database
+        db_path = Path("/Users/alexanderbenady/DataThesis/eu-legal-recommender/scraper/data/eurlex.db")
+        
+        if not db_path.exists():
+            logger.warning(f"Database file not found at {db_path}")
+            return {}
+            
+        # Connect to the database
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row  # This enables column access by name
+        cursor = conn.cursor()
+        
+        # First, let's check the table structure to ensure we use the right columns
+        cursor.execute("PRAGMA table_info(documents)")
+        columns = [col[1] for col in cursor.fetchall()]
+        logger.info(f"Database document columns: {columns}")
+        
+        # Query for document based on CELEX number
+        # Use only celex_number as it's the standard identifier
+        cursor.execute(
+            "SELECT * FROM documents WHERE celex_number = ? LIMIT 1", 
+            (document_id,)
+        )
+        
+        document = cursor.fetchone()
+        
+        if not document:
+            logger.warning(f"Document {document_id} not found in database")
+            return {}
+            
+        # Convert row to dictionary 
+        doc_dict = dict(document)
+        
+        # Get additional metadata from other tables
+        
+        # Check if subject matters tables exist
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND (name='document_subject_matters' OR name='subject_matters')")
+        subject_tables = [row[0] for row in cursor.fetchall()]
+        subject_matters = []
+        
+        if len(subject_tables) == 2:  # Both tables exist
+            try:
+                # Based on the actual schema detected in the logs
+                cursor.execute(
+                    """SELECT sm.subject_name 
+                       FROM document_subject_matters dsm 
+                       JOIN subject_matters sm ON dsm.subject_id = sm.subject_id 
+                       WHERE dsm.document_id = ?""", 
+                    (doc_dict.get('document_id'),)
+                )
+                subject_matters = [row[0] for row in cursor.fetchall()]
+            except sqlite3.OperationalError as e:
+                # Handle case where schema is different
+                logger.warning(f"Could not query subject matters: {e}")
+                # Try an alternative approach if the first query fails
+                try:
+                    cursor.execute("SELECT * FROM document_subject_matters LIMIT 1")
+                    cols = [col[0] for col in cursor.description]
+                    logger.info(f"document_subject_matters columns: {cols}")
+                    
+                    cursor.execute("SELECT * FROM subject_matters LIMIT 1")
+                    cols = [col[0] for col in cursor.description]
+                    logger.info(f"subject_matters columns: {cols}")
+                except Exception as e2:
+                    logger.error(f"Error examining subject_matters tables: {e2}")
+        else:
+            logger.warning(f"Subject matter tables not found. Available tables: {subject_tables}")
+            
+        # Check if summaries table exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='summaries'")
+        summary_table_exists = cursor.fetchone() is not None
+        summary = ""
+        
+        if summary_table_exists:
+            try:
+                # Get summary if available
+                cursor.execute(
+                    "SELECT summary FROM summaries WHERE document_id = ? LIMIT 1",
+                    (doc_dict.get('id'),)
+                )
+                summary_row = cursor.fetchone()
+                summary = summary_row[0] if summary_row else ""
+            except sqlite3.OperationalError as e:
+                logger.warning(f"Could not query summaries: {e}")
+                try:
+                    cursor.execute("SELECT * FROM summaries LIMIT 1")
+                    cols = [col[0] for col in cursor.description]
+                    logger.info(f"summaries columns: {cols}")
+                except Exception as e2:
+                    logger.error(f"Error examining summaries table: {e2}")
+        else:
+            logger.warning("Summaries table not found")
+            
+        # If we couldn't get a summary from the database, try to extract one from text
+        if not summary and 'text' in doc_dict and doc_dict['text']:
+            # Take first 300 characters of text as summary
+            summary = doc_dict['text'][:300] + '...'
+        
+        # Prepare metadata in format compatible with the app - using actual column names from logs
+        metadata = {
+            'id': doc_dict.get('document_id'),
+            'celex_number': doc_dict.get('celex_number'),
+            'title': doc_dict.get('title'),
+            'document_type': 'EU Document',  # Default type since it might not be in the schema
+            'date': doc_dict.get('date_of_document') or doc_dict.get('date_of_effect'),
+            'year': doc_dict.get('date_of_document', '').split('-')[0] if doc_dict.get('date_of_document') else '',
+            'url': doc_dict.get('html_url') or doc_dict.get('pdf_url') or f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{document_id}",
+            'subject_matters': subject_matters,
+            'text': doc_dict.get('content', ''),
+            'summary': doc_dict.get('summary', summary)
+        }
+        
+        # Close the connection
+        conn.close()
+        
+        return {'metadata': metadata}
+        
+    except Exception as e:
+        logger.error(f"Error retrieving document from database: {str(e)}")
+        return {}
 
 def get_cache_stats() -> Dict[str, Any]:
     """Get statistics about the current cache."""

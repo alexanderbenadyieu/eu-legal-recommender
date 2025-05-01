@@ -310,36 +310,72 @@ def display_profile_info(profile_data: Dict) -> None:
             st.info("No component weights available for this client.")
 
 def render_recommendation_card(rec: Dict[str, Any], rank: int) -> None:
-    """Render a recommendation as a styled card."""
+    """Render a recommendation as a styled card with enhanced metadata."""
     metadata = rec.get('metadata', {})
     doc_id = rec['id']
     score = rec['score']
     title = metadata.get('title', 'No title available')
     doc_type = metadata.get('document_type', 'unknown')
-    year = metadata.get('year', 'N/A')
-    subject_matters = metadata.get('subject_matters', [])
+    
+    # Get date information - try different date fields
+    date = metadata.get('date', metadata.get('publication_date', metadata.get('adoption_date', 'N/A')))
+    if date != 'N/A' and date:
+        # Try to format the date nicely if it exists
+        try:
+            # Check if it's a string that needs parsing or already a date object
+            if isinstance(date, str):
+                if '-' in date:
+                    # Try ISO format like '2023-04-15'
+                    year, month, day = date.split('-')
+                    date = f"{day}/{month}/{year}"
+                elif '/' in date:
+                    # Already in day/month/year format
+                    date = date
+            # If all else fails, just use the year field as a fallback
+            year = metadata.get('year', 'N/A')
+        except Exception:
+            # Fallback to year if date parsing fails
+            date = metadata.get('year', 'N/A')
+    else:
+        # Fallback to year if no date field exists
+        date = metadata.get('year', 'N/A')
+    
+    # Get EUR-Lex URL or construct it from CELEX number
     celex = metadata.get('celex_number', 'N/A')
+    eurlex_url = metadata.get('url', '')
+    if not eurlex_url and celex != 'N/A':
+        eurlex_url = f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex}"
+    
+    # Get summary if available
+    summary = metadata.get('summary', rec.get('summary', ''))
+    if not summary and 'text' in metadata and metadata['text']:
+        # If no summary but we have text, use first 200 chars as a preview
+        summary = metadata['text'][:200] + '...' if len(metadata['text']) > 200 else metadata['text']
+    
+    subject_matters = metadata.get('subject_matters', [])
     
     # Format score information
     score_info = f"{score:.4f}"
     if 'original_similarity' in rec and 'temporal_score' in rec:
         score_info = f"{score:.4f} (Orig: {rec['original_similarity']:.4f}, Temporal: {rec['temporal_score']:.4f})"
     
-    # Create a styled card with HTML
+    # Create a styled card with HTML - enhanced with date, URL and summary
     card_html = f"""
     <div class="recommendation-card">
         <h3 style="margin-top:0">#{rank} - {title}</h3>
         <p><strong>Document ID:</strong> {doc_id} | <strong>CELEX:</strong> {celex}</p>
         <p><strong>Score:</strong> {score_info}</p>
-        <p><strong>Type:</strong> {doc_type} | <strong>Year:</strong> {year}</p>
+        <p><strong>Type:</strong> {doc_type} | <strong>Date:</strong> {date}</p>
         <p><strong>Subject Matters:</strong> {', '.join(subject_matters[:5])}{' ...' if len(subject_matters) > 5 else ''}</p>
+        {f'<p><a href="{eurlex_url}" target="_blank">View on EUR-Lex</a></p>' if eurlex_url else ''}
+        {f'<div class="summary-box"><strong>Summary:</strong><br>{summary}</div>' if summary else ''}
     </div>
     """
     
     st.markdown(card_html, unsafe_allow_html=True)
 
 def display_recommendations_with_formatting(recommendations: List[Dict], mode: str, show_visualizations: bool = True) -> None:
-    """Display recommendations with improved visual formatting."""
+    """Display recommendations with improved visual formatting, including dates, URLs and summaries."""
     from .visualization import (
         display_recommendation_metrics, 
         display_document_similarity_graph,
@@ -380,14 +416,26 @@ def display_recommendations_with_formatting(recommendations: List[Dict], mode: s
         
         metadata = rec.get('metadata', {})
         
+        # Get date information - try different date fields
+        date = metadata.get('date', metadata.get('publication_date', metadata.get('adoption_date', 'N/A')))
+        if date == 'N/A' or not date:
+            date = metadata.get('year', 'N/A')
+            
+        # Get EUR-Lex URL
+        celex = metadata.get('celex_number', 'N/A')
+        eurlex_url = metadata.get('url', '')
+        if not eurlex_url and celex != 'N/A':
+            eurlex_url = f"https://eur-lex.europa.eu/legal-content/EN/TXT/?uri=CELEX:{celex}"
+            
         data.append({
             "Rank": i,
             "Document ID": rec['id'],
             "Score": score_info,
-            "CELEX": metadata.get('celex_number', 'N/A'),
+            "CELEX": celex,
             "Type": metadata.get('document_type', 'N/A'),
             "Title": metadata.get('title', 'N/A')[:100] + ('...' if len(metadata.get('title', '')) > 100 else ''),
-            "Year": metadata.get('year', 'N/A'),
+            "Date": date,
+            "URL": eurlex_url if eurlex_url else "N/A",
             "Subject Matters": ", ".join(metadata.get('subject_matters', []))[:50] + ('...' if len(", ".join(metadata.get('subject_matters', []))) > 50 else '')
         })
     
