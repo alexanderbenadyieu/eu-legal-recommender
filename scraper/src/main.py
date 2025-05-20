@@ -30,9 +30,9 @@ from typing import Optional
 import argparse
 from loguru import logger
 
-from scraper import EURLexScraper
-from logging_config import setup_logging
-from exceptions import InvalidDateError
+from .scraper import EURLexScraper
+from .logging_config import setup_logging
+from .exceptions import InvalidDateError
 
 def validate_date_range(start_date: datetime, end_date: datetime) -> None:
     """

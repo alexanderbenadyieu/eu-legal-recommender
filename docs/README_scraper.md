@@ -36,7 +36,6 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
 2. **Parsers (`parsers.py`)**
    - `MetadataParser`: Extracts structured metadata from document pages
    - `DocumentParser`: Processes document content and formats
-   - `HTMLParser`: Handles HTML content
      - Preserves complete HTML structure
      - Extracts clean text content
      - Maintains document formatting
@@ -49,9 +48,11 @@ A web scraper for extracting legislative documents from EUR-Lex, focusing on the
    - Ensures atomic writes to prevent data corruption
 
 4. **Document Tracker (`document_tracker.py`)**
-   - Manages document deduplication
+   - Manages document tracking and deduplication
    - Tracks already processed documents
    - Prevents re-scraping of existing documents
+   - Identifies and resolves duplicate documents
+   - Supports post-processing cleanup of duplicates
 
 5. **Validation (`validation.py`)**
    - Validates document metadata against a predefined schema
@@ -134,8 +135,8 @@ python src/main.py --start-date 2023-10-01 --end-date 2024-01-31
 
 1. Clone the repository:
 ```bash
-git clone [repository-url]
-cd eurlex-scraper
+git clone https://github.com/alexanderbenadyieu/eu-legal-recommender
+cd eu-legal-recommender/scraper
 ```
 
 2. Create and activate a virtual environment:
@@ -161,8 +162,8 @@ scraper/
 │   ├── scraper.py     # Core scraping logic
 │   ├── parsers.py     # HTML and metadata parsers
 │   ├── storage.py     # Data storage handlers
-│   ├── document_tracker.py # Document tracking
-│   ├── deduplicator.py # Document deduplication
+│   ├── document_tracker.py # Document tracking and deduplication
+│   ├── deduplicate.py # Command-line interface for deduplication
 │   ├── validation.py  # Metadata validation
 │   └── metrics.py     # Metrics collection
 ├── config/            # Configuration files
@@ -220,14 +221,14 @@ The scraper implements several error handling mechanisms:
    - Specific handling for different HTTP status codes
 
 2. **Rate Limiting**
-   - Token bucket algorithm implementation
-   - Configurable rate limits
-   - Automatic rate adjustment based on server response
+   - Configurable request timeouts
+   - Automatic delay between requests
+   - Adaptive retry mechanisms
 
 3. **Recovery Mechanisms**
-   - Checkpoint system for interrupted sessions
    - Transaction-like storage operations
    - Automatic cleanup of partial downloads
+   - Robust error handling for network failures
 
 4. **Logging and Monitoring**
    - Structured logging with rotation

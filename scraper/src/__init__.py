@@ -6,28 +6,28 @@ This package contains the core functionality for scraping legislative documents 
 
 from .scraper import EURLexScraper
 from .parsers import DocumentParser
-from .storage import DocumentStorage
+from .storage import StorageManager
 from .document_tracker import DocumentTracker
 from .config_manager import ConfigManager
 from .exceptions import (
-    ScraperError,
-    ParserError,
+    ScrapingError,
+    ParseError,
     StorageError,
     ValidationError,
     InvalidDateError,
-    ConfigError
+    ConfigurationError
 )
 
 __all__ = [
     'EURLexScraper',
     'DocumentParser',
-    'DocumentStorage',
+    'StorageManager',
     'DocumentTracker',
     'ConfigManager',
-    'ScraperError',
-    'ParserError',
+    'ScrapingError',
+    'ParseError',
     'StorageError',
     'ValidationError',
     'InvalidDateError',
-    'ConfigError'
+    'ConfigurationError'
 ]

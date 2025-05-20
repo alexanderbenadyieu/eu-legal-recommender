@@ -28,7 +28,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from loguru import logger
 
-from exceptions import ParseError
+from .exceptions import ParseError
 
 
 @dataclass

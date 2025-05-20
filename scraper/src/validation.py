@@ -16,7 +16,7 @@ import re
 from jsonschema import validate
 from loguru import logger
 
-from exceptions import ValidationError
+from .exceptions import ValidationError
 
 # JSON Schema for document metadata
 METADATA_SCHEMA = {
