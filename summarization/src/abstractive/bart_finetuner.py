@@ -1,12 +1,37 @@
-# summarization/src/abstractive/bart_finetuner.py
+"""BART-based abstractive summarization for EU legal documents.
+
+This module provides a wrapper for fine-tuned BART models specialized for
+summarizing EU legal documents. It includes models optimized for different
+document lengths and tiers in the summarization pipeline.
+
+The models are fine-tuned on EU legal document datasets to better capture
+the specific language and structure of legal texts.
+"""
+
 from transformers import pipeline
 import logging
 
 logger = logging.getLogger(__name__)
 
 class BartFineTuner:
+    """BART-based abstractive summarization for EU legal documents.
+    
+    This class provides a wrapper for fine-tuned BART models specialized for
+    different tiers of the summarization pipeline. It loads and manages multiple
+    models optimized for different document lengths and summarization requirements.
+    
+    The class handles model loading, text generation, and error handling for the
+    abstractive summarization component of the pipeline.
+    """
+    
     def __init__(self):
-        """Initialize BART models for different tiers of summarization."""
+        """Initialize BART models for different tiers of summarization.
+        
+        Loads specialized models for each tier:
+        - Tier 1: Direct summarization for short documents (0-600 words)
+        - Tier 2: Two-step summarization for medium documents (600-2500 words)
+        - Tier 3/4: Hierarchical summarization for long documents (2500+ words)
+        """
         try:
             # Tier 1 model (0-600 words)
             self.tier1_model = pipeline(

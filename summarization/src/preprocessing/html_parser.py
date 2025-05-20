@@ -1,5 +1,13 @@
 """
-Parse and preprocess HTML content from legal documents
+Parse and preprocess HTML content from EU legal documents.
+
+This module provides functionality for parsing HTML content from EUR-Lex documents,
+extracting structured information such as sections, titles, and content. It handles
+the specific formatting and structure of EU legal documents to prepare them for
+the summarization pipeline.
+
+The module includes classes for representing document sections and a parser that
+handles the extraction of content from different document types and formats.
 """
 import json
 from pathlib import Path
@@ -15,7 +23,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class DocumentSection:
-    """Represents a section of the legal document"""
+    """Represents a section of an EU legal document.
+    
+    This class stores the title, content, and type of a document section,
+    providing a structured representation of document parts for processing
+    in the summarization pipeline.
+    
+    Attributes:
+        title: The title or heading of the section
+        content: The textual content of the section
+        section_type: The type of section (e.g., 'preamble', 'article', 'annex')
+    """
     title: str
     content: str
     section_type: str

@@ -1,5 +1,12 @@
 """
 Keyword extraction for EU legal documents using KeyBERT.
+
+This module provides functionality for extracting relevant keywords and phrases
+from EU legal documents using the KeyBERT model, which leverages BERT embeddings
+to identify the most semantically important terms in a document.
+
+The extracted keywords are stored in the database and can be used for document
+indexing, search, and recommendation purposes in the EU Legal Recommender system.
 """
 import sqlite3
 from pathlib import Path
@@ -14,12 +21,9 @@ import sys
 import os
 import time
 
-# Add the project root to the Python path to import database_utils
-project_root = str(Path(__file__).parents[2])
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
-from database_utils import get_db_connection, save_document_keyword
+# Import from project root and local modules
+from ..database_utils import get_db_connection, save_document_keyword
+from .utils.config import get_config
 
 # Set up logging
 logging.basicConfig(

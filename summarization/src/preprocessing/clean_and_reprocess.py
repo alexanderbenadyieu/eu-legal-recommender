@@ -6,12 +6,10 @@ from pathlib import Path
 import sys
 from tqdm import tqdm
 
-# Add parent directory to path to import parser
-sys.path.append(str(Path(__file__).parent.parent))
-sys.path.append(str(Path(__file__).parents[3]))  # Add project root to path
-
-from summarization.src.preprocessing.html_parser import LegalDocumentParser
-from database_utils import get_db_connection, save_document_section
+# Import local modules
+from .html_parser import LegalDocumentParser
+# Import from project root
+from ...database_utils import get_db_connection, save_document_section
 
 def get_word_count(text: str) -> int:
     """Get word count of text."""

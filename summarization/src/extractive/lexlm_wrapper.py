@@ -1,9 +1,19 @@
-# summarization/src/extractive/lexlm_wrapper.py
+"""LexLM-based extractive summarization for EU legal documents.
+
+This module provides a wrapper for the LexLM model (legal-roberta-large) to perform
+extractive summarization on EU legal documents. It uses sentence embeddings to identify
+the most important sentences in a document based on semantic similarity.
+
+The extractive summarization is used as a preprocessing step for longer documents
+before applying abstractive summarization, helping to reduce the input size while
+preserving the most important information.
+"""
+
 from transformers import AutoTokenizer, AutoModel
 import torch
 import nltk
 from nltk.tokenize import sent_tokenize
-from typing import List
+from typing import List, Dict, Any, Optional
 
 # Download required NLTK data
 try:

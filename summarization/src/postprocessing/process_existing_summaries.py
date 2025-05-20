@@ -6,12 +6,8 @@ from pathlib import Path
 from typing import List, Tuple
 from tqdm import tqdm
 
-# Add the project root to the Python path
-project_root = str(Path(__file__).parents[3])
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
-from database_utils import get_db_connection
+# Import from project root
+from ...database_utils import get_db_connection
 from .deepseek_processor import DeepSeekPostProcessor
 
 logging.basicConfig(level=logging.INFO)

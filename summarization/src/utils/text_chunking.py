@@ -1,4 +1,14 @@
-"""Utilities for chunking text in a way that respects document structure."""
+"""Utilities for chunking text in a way that respects document structure.
+
+This module provides functions for splitting long documents into smaller chunks
+that can be processed by transformer models with limited context windows. The
+chunking algorithms prioritize maintaining document structure and coherence by
+respecting paragraph and sentence boundaries.
+
+The chunking process is essential for processing longer documents in the EU Legal
+Recommender system, particularly for Tier 2, 3, and 4 documents that exceed the
+context window size of the underlying models.
+"""
 
 import re
 from typing import List

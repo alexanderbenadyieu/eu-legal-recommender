@@ -1,6 +1,20 @@
+"""
+Multi-tier summarization pipeline for EU legal documents.
+
+This module implements the core summarization pipeline for the EU Legal Recommender system,
+using a tiered approach based on document length:
+
+- Tier 1 (0-600 words): Direct abstractive summarization
+- Tier 2 (601-2,500 words): Two-step summarization with extractive then abstractive
+- Tier 3 (2,501-20,000 words): Hierarchical summarization with section-aware processing
+- Tier 4 (20,000+ words): Advanced hierarchical summarization with weighted extraction
+
+The pipeline handles document retrieval from the database, processing through the appropriate
+tier-specific summarization strategy, and storing the results back in the database.
+"""
+
 import logging
 import sqlite3
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -12,17 +26,25 @@ try:
 except LookupError:
     nltk.download('punkt')
 
-# Add the project root to the Python path
-project_root = str(Path(__file__).parents[2])
-if project_root not in sys.path:
-    sys.path.append(project_root)
+# Import system modules
+import sys
+import os
 
+# Add the project root to the Python path to access all modules correctly
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, project_root)
+
+# Import local modules directly
+from src.utils.database_utils import Document
+from src.preprocessing.html_parser import LegalDocumentParser
+from src.utils.text_chunking import chunk_text
+from src.extractive.lexlm_wrapper import LexLMExtractor
+from src.abstractive.bart_finetuner import BartFineTuner
+from src.utils.config import get_config
+
+# Import database utilities from project root
+sys.path.insert(0, os.path.abspath(os.path.join(project_root, '..'))) 
 from database_utils import get_db_connection, save_document_summary, get_document_sections
-from .utils.database_utils import Document
-from .preprocessing.html_parser import LegalDocumentParser
-from .utils.text_chunking import chunk_text
-from .extractive.lexlm_wrapper import LexLMExtractor
-from .abstractive.bart_finetuner import BartFineTuner
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,10 +57,19 @@ class SummarizationPipeline:
         Args:
             db_type: Type of database to use ('consolidated' or 'legacy')
             config: Configuration dictionary containing chunking parameters
+                    If None, loads from centralized configuration system
         """
         self.db_type = db_type
+        
+        # Use provided config or load from centralized configuration system
+        if config is None:
+            config = get_config()
+            logger.info("Using centralized configuration system")
+            
         self.full_config = config  # Store full config
-        self.config = config['chunking'] if config and 'chunking' in config else {}
+        self.config = config.get('chunking', {})
+        
+        # Initialize components
         self.html_parser = LegalDocumentParser(Path.cwd())
         self.extractor = LexLMExtractor(config=config)
         self.generator = BartFineTuner()
@@ -139,12 +170,13 @@ class SummarizationPipeline:
         2. Apply weighted compression to reach intermediate target (600-750 words)
         3. Generate final abstractive summary (480-600 words)
         """
-        from .utils.tier3_utils import Section, process_section, refine_extraction
+        from .utils.tier_processing import Section, process_tier3_section as process_section, refine_extraction
         from nltk.tokenize import word_tokenize
         
         logger.info(f"Processing Tier 3 document {document.celex_number} using section-aware approach")
         
         # Get document sections from database
+        cursor = conn.cursor()
         cursor.execute("""
             SELECT id, title, content, section_type, section_order, word_count 
             FROM document_sections 
@@ -242,83 +274,92 @@ class SummarizationPipeline:
         """
         from nltk.tokenize import word_tokenize
         import re
+        from .utils.tier_processing import (
+            Section, ProcessedChunk, split_into_subsections, get_chunk_weights
+        )
         
         def count_words(text: str) -> int:
+            """Count words in text."""
             return len(word_tokenize(text))
             
-        def split_into_sections(text: str) -> List[str]:
-            """Split text into sections based on headers."""
-            section_patterns = [
-                r'(?:\n|^)\s*(?:SECTION|Article|ARTICLE|Chapter|CHAPTER)\s+\d+[:\.]',
-                r'(?:\n|^)\s*\d+\.\s+[A-Z]',  # Numbered sections
-                r'(?:\n|^)\s*[A-Z][A-Z\s]+(?:\n|$)'  # ALL CAPS headers
+        def split_into_sections(text: str, max_section_words: int = 3000) -> list:
+            """Split text into sections of approximately equal size."""
+            words = count_words(text)
+            
+            if words <= max_section_words:
+                return [text]
+                
+            # Try to split on section markers
+            section_markers = [
+                r'\n\s*Article\s+\d+\s*\n',
+                r'\n\s*Section\s+\d+\s*\n',
+                r'\n\s*CHAPTER\s+\d+\s*\n',
+                r'\n\s*TITLE\s+\d+\s*\n',
+                r'\n\s*\d+\.\s+',  # Numbered paragraphs
+                r'\n\n'  # Double line breaks as last resort
             ]
             
-            sections = [text]  # Start with full text
-            for pattern in section_patterns:
+            sections = [text]
+            
+            for marker in section_markers:
                 new_sections = []
                 for section in sections:
-                    splits = [s.strip() for s in re.split(pattern, section) if s.strip()]
-                    if len(splits) > 1:
-                        new_sections.extend(splits)
+                    if count_words(section) > max_section_words:
+                        # Try to split on this marker
+                        parts = re.split(marker, section)
+                        if len(parts) > 1:
+                            # Recombine with the markers
+                            reconstructed = []
+                            for i, part in enumerate(parts):
+                                if i == 0:
+                                    reconstructed.append(part)
+                                else:
+                                    match = re.search(marker, section)
+                                    if match:
+                                        marker_text = match.group(0)
+                                        reconstructed.append(marker_text + part)
+                                    else:
+                                        reconstructed.append(part)
+                            new_sections.extend(reconstructed)
+                        else:
+                            new_sections.append(section)
                     else:
                         new_sections.append(section)
                 sections = new_sections
             return sections
             
-        def process_section(section: str) -> str:
+        def process_section(section_text: str) -> str:
             """Process a single section based on its length."""
-            words = count_words(section)
+            words = count_words(section_text)
             
             if words <= 750:
                 # Direct BART summarization
-                return self.generator.summarize_tier4_section(section, max_length=350)
+                return self.generator.summarize_tier4_section(section_text, max_length=350)
             elif words <= 1500:
                 # Extract to 600, then summarize to 350
                 extracted = self.extractor.extract_key_sentences(
-                    section,
+                    section_text,
                     target_length=600,
                     tier=4
                 )
                 return self.generator.summarize_tier4_section(extracted, max_length=350)
             else:
-                # Split into subsections of max 1500 words
-                subsections = []
-                current_subsection = []
-                current_words = 0
+                # Split into subsections using the utility function
+                subsections = split_into_subsections(section_text)
+                processed_subsections = []
                 
-                for sentence in nltk.sent_tokenize(section):
-                    sent_words = count_words(sentence)
-                    if current_words + sent_words > 1500:
-                        # Process current subsection
-                        subsection_text = ' '.join(current_subsection)
-                        extracted = self.extractor.extract_key_sentences(
-                            subsection_text,
-                            target_length=600,
-                            tier=4
-                        )
-                        summary = self.generator.summarize_tier4_section(extracted, max_length=350)
-                        subsections.append(summary)
-                        
-                        # Start new subsection
-                        current_subsection = [sentence]
-                        current_words = sent_words
-                    else:
-                        current_subsection.append(sentence)
-                        current_words += sent_words
-                
-                # Process final subsection if any
-                if current_subsection:
-                    subsection_text = ' '.join(current_subsection)
+                for i, subsec in enumerate(subsections):
+                    # Extract from subsection
                     extracted = self.extractor.extract_key_sentences(
-                        subsection_text,
+                        subsec,
                         target_length=600,
                         tier=4
                     )
+                    # Summarize extracted text
                     summary = self.generator.summarize_tier4_section(extracted, max_length=350)
-                    subsections.append(summary)
+                    processed_subsections.append(summary)
                 
-                return '\n'.join(subsections)
+                return '\n'.join(processed_subsections)
         
         # Step 1: Section-Based Pre-Summarization
         sections = split_into_sections(text)
@@ -401,12 +442,12 @@ class SummarizationPipeline:
         # Query for documents that need summarization
         if self.db_type == 'consolidated':
             query = """
-                SELECT document_id as id, celex_number, html_url, word_count as total_words, 
+                SELECT document_id as id, celex_number, html_url, total_words, 
                        summary, summary_word_count, compression_ratio
                 FROM documents
-                WHERE word_count BETWEEN ? AND ?
+                WHERE total_words BETWEEN ? AND ?
                 AND summary IS NULL
-                ORDER BY word_count
+                ORDER BY total_words
             """
         else:
             # Legacy database query

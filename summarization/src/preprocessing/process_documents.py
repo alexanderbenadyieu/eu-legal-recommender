@@ -5,14 +5,10 @@ import sqlite3
 from dataclasses import dataclass
 from typing import List, Optional
 from datetime import datetime
-from src.preprocessing.html_parser import LegalDocumentParser, DocumentSection
+from .html_parser import LegalDocumentParser, DocumentSection
 
-# Add the project root to the Python path to import database_utils
-project_root = str(Path(__file__).parents[3])
-if project_root not in sys.path:
-    sys.path.append(project_root)
-
-from database_utils import get_db_connection, save_document_section
+# Import from project root
+from ...database_utils import get_db_connection, save_document_section
 
 @dataclass
 class Document:

@@ -1,3 +1,9 @@
+"""Database utilities for the summarization module.
+
+This module provides database-related functionality for the summarization pipeline,
+including data structures and helper functions for interacting with the database.
+"""
+
 import sqlite3
 import logging
 import sys
@@ -6,17 +12,30 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-# Add the project root to the Python path
-project_root = str(Path(__file__).parents[3])
-if project_root not in sys.path:
-    sys.path.append(project_root)
+# Import from project root by adding the project root to the Python path
+import os
+import sys
 
+# Add the project root to the Python path to access database_utils
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))) 
 from database_utils import get_db_connection, get_document_by_celex, get_document_sections
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class Document:
+    """Represents a legal document in the EU Legal Recommender system.
+    
+    This class stores document metadata and summarization results.
+    
+    Attributes:
+        id: Database identifier for the document
+        celex_number: Unique CELEX identifier for EU legal documents
+        html_url: URL to the HTML version of the document
+        total_words: Total word count of the document
+        summary: Generated summary text
+        summary_word_count: Word count of the summary
+    """
     id: int
     celex_number: str
     html_url: Optional[str]
