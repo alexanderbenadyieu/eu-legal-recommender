@@ -11,8 +11,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from src.utils.logging import get_logger
-from src.utils.exceptions import ValidationError, ProcessingError
+from ..utils.logging import get_logger
+from ..utils.exceptions import ValidationError, ProcessingError
 
 # Set up logger for this module
 logger = get_logger(__name__)

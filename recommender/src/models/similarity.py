@@ -14,8 +14,8 @@ import torch
 import os
 
 # Import utilities
-from src.utils.logging import get_logger
-from src.utils.exceptions import ValidationError, ProcessingError, ConfigurationError
+from ..utils.logging import get_logger
+from ..utils.exceptions import ValidationError, ProcessingError, ConfigurationError
 
 # Set up logger for this module
 logger = get_logger(__name__)

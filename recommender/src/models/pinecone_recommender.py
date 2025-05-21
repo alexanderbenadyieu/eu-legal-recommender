@@ -13,19 +13,21 @@ import pinecone
 import sys
 import os
 
-# Add the parent directory to the path so we can import database_utils
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
-import database_utils
-
+# Import local modules
 from .embeddings import BERTEmbedder
 from .features import FeatureProcessor
-from src.utils.logging import get_logger
-from src.utils.exceptions import (
+from ..utils.logging import get_logger
+from ..utils.exceptions import (
     PineconeError, 
     ValidationError, 
     EmbeddingError,
     RecommendationError
 )
+
+# Import database_utils from project root
+# This is needed for database access
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
+import database_utils
 
 # Set up logger for this module
 logger = get_logger(__name__)

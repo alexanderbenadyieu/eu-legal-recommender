@@ -17,12 +17,12 @@ from .embeddings import BERTEmbedder
 from .features import FeatureProcessor
 
 # Import configuration
-from src.config import USER_PROFILE, SIMILARITY, PINECONE, EMBEDDER, LOGS_DIR
-from src.utils.weight_config import WeightConfig
+from ..config import USER_PROFILE, SIMILARITY, PINECONE, EMBEDDER, LOGS_DIR
+from ..utils.weight_config import WeightConfig
 
 # Import utilities
-from src.utils.logging import get_logger
-from src.utils.exceptions import (
+from ..utils.logging import get_logger
+from ..utils.exceptions import (
     RecommenderError, ValidationError, PineconeError, 
     EmbeddingError, RecommendationError, ProfileError
 )

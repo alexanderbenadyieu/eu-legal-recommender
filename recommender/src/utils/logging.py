@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
-from src.config import LOGS_DIR
+from ..config import LOGS_DIR
 
 
 def setup_logger(

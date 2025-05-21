@@ -18,7 +18,7 @@ from .embeddings import BERTEmbedder
 from .features import FeatureProcessor
 
 # Import configuration
-from src.config import USER_PROFILE, LOGS_DIR
+from ..config import USER_PROFILE, LOGS_DIR
 
 # Set up logging
 logging.basicConfig(
