@@ -78,7 +78,33 @@ def load_profile_data(profile_name: str) -> Tuple[Dict, str]:
         with open(profile_path, 'r') as f:
             profile_data = json.load(f)
         
+        # Ensure the user_id is set correctly
         user_id = profile_data.get('user_id', profile_name)
+        
+        # For profiles in fake_clients directory, ensure they have the correct structure
+        if 'fake_clients' in str(profile_path) and 'profile' not in profile_data:
+            # Create a standard profile structure if it doesn't exist
+            logger.info(f"Standardizing profile structure for {profile_name}")
+            
+            # Check if the profile has an expert_description field (common in fake clients)
+            expert_description = profile_data.get('expert_description', '')
+            
+            profile_data = {
+                'user_id': user_id,
+                'profile': {
+                    'expert_profile': {
+                        'description': expert_description
+                    },
+                    'historical_documents': profile_data.get('historical_documents', []),
+                    'categorical_preferences': profile_data.get('categorical_preferences', {}),
+                    'component_weights': profile_data.get('component_weights', {
+                        'expert_profile': 0.4,
+                        'historical_documents': 0.3,
+                        'categorical_preferences': 0.3
+                    })
+                }
+            }
+            
         return profile_data, user_id
     except Exception as e:
         st.error(f"Error loading profile: {str(e)}")
