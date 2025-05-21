@@ -224,8 +224,3 @@ eu-legal-recommender/
 │
 └── README.md                     # Main project documentation
 ```
-
-## License
-
-[MIT License](LICENSE)
-
