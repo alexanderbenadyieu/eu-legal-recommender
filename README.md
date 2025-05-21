@@ -137,9 +137,9 @@ The recommender component includes a Streamlit application that provides a user-
 
 Each profile contains an expert description of business interests, historical documents, categorical preferences, and component weights for the recommendation algorithm.
 
-See the [Recommender Documentation](recommender/README_recommender.md) for detailed usage instructions.
-
 ![Client Profile Visualization](notebooks/images/image5.png)
+
+See the [Recommender Documentation](recommender/README_recommender.md) for detailed usage instructions.
 
 ## Command-Line Interfaces
 
