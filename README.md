@@ -39,6 +39,8 @@ The EU Legal Recommender system consists of three independent but complementary 
 - **Interactive Web Interface**: Explore recommendations through a user-friendly Streamlit application
 - **Client Profiles**: Pre-configured industry-specific profiles for demonstration purposes
 
+![System Architecture Overview](notebooks/images/image1.png)
+
 ## Project Components
 
 The EU Legal Recommender system consists of three main components, each with its own detailed README file:
@@ -49,6 +51,8 @@ The EU Legal Recommender system consists of three main components, each with its
    - Efficient hierarchical storage structure (year/month/day)
    - Focuses on the Official Journal L series (Legislation)
 
+![Document Scraping Process](notebooks/images/image2.png)
+
 2. **[Summarization](summarization/README_summariser.md)**: Processes EU legal documents to generate concise summaries and extract keywords
    - Multi-tier summarization strategy based on document length
    - Tier 1 (0-600 words): Direct abstractive summarization
@@ -56,11 +60,15 @@ The EU Legal Recommender system consists of three main components, each with its
    - Tier 3 (2,501-20,000 words): Hierarchical summarization with section-aware processing
    - Tier 4 (20,000+ words): Advanced hierarchical summarization with weighted extraction
 
+![Summarization Process](notebooks/images/image3.png)
+
 3. **[Recommender](recommender/README_recommender.md)**: Provides personalized document recommendations based on semantic similarity and categorical features
    - Hybrid approach combining text embedding similarity (70%) and categorical feature matching (30%)
    - Legal-BERT for domain-specific semantic understanding
    - User profile management with expert descriptions, historical documents, and categorical preferences
    - Interactive Streamlit web interface for exploring recommendations
+
+![Recommender Process](notebooks/images/image4.png)
 
 Each component has its own detailed README with comprehensive usage instructions, architecture details, and configuration options.
 
@@ -95,6 +103,8 @@ pip install -r requirements.txt
 ```
 
 ## Component Highlights
+
+![Client Profile Visualization](notebooks/images/image5.png)
 
 ### Scraper Features
 
