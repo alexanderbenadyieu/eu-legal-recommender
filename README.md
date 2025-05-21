@@ -104,8 +104,6 @@ pip install -r requirements.txt
 
 ## Component Highlights
 
-![Client Profile Visualization](notebooks/images/image5.png)
-
 ### Scraper Features
 
 The scraper component is designed to efficiently extract EU legal documents from EUR-Lex with high reliability:
@@ -140,6 +138,8 @@ The recommender component includes a Streamlit application that provides a user-
 Each profile contains an expert description of business interests, historical documents, categorical preferences, and component weights for the recommendation algorithm.
 
 See the [Recommender Documentation](recommender/README_recommender.md) for detailed usage instructions.
+
+![Client Profile Visualization](notebooks/images/image5.png)
 
 ## Command-Line Interfaces
 
@@ -224,8 +224,3 @@ eu-legal-recommender/
 │
 └── README.md                     # Main project documentation
 ```
-
-## License
-
-[MIT License](LICENSE)
-
