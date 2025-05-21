@@ -161,8 +161,17 @@ def get_document_from_db(document_id: str) -> Dict:
     # Use the standard path for the database
     db_path = os.path.expanduser("~/DataThesis/eu-legal-recommender/scraper/data/eurlex.db")
     
+    # For Hugging Face deployment, check for database in the repository structure
     if not os.path.exists(db_path):
-        logger.warning(f"Database file not found at {db_path}")
+        # Try relative path from current directory
+        repo_db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 
+                                  "scraper", "data", "eurlex.db")
+        if os.path.exists(repo_db_path):
+            db_path = repo_db_path
+            logger.info(f"Using database at repository path: {db_path}")
+        else:
+            logger.warning(f"Database file not found at {db_path} or {repo_db_path}")
+            logger.info("Using demo mode with minimal metadata")
         return {}
     
     # Ensure we're working with a valid CELEX number - clean it
